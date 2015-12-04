@@ -3,7 +3,7 @@ CFLAGS ?=
 LDFLAGS ?=
 
 EXTRA_FLAGS ?= -Wall -Werror -DLOG_PATH
-EXTRA_LDFLASG ?= -flto
+EXTRA_LDFLASG ?= -flto -lconfig
 
 CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
