@@ -34,28 +34,23 @@ void deinitialize_config();
 
 #define SET_CONFIG_SPEC(OPTS_LIST) \
 	enum opt_index_t { \
-		OPT_INDEX_FIRST_OPT = 0, \
 		OPTS_LIST(JUST_NAME) \
 		OPT_INDEX_OPT_MAX \
 	}; \
 	static struct program_config_t __program_config[] = { \
-		[OPT_INDEX_FIRST_OPT] = {}, \
 		OPTS_LIST(SINGLE_OPT) \
 	}; \
 	MK_GETTERS(OPTS_LIST)
 
-#define MK_TYPES(TYPES_LIST) \
-	enum config_option_type_t { \
-		TYPES_LIST(MK_OPT_TYPE) \
-	}; \
-	struct program_config_t { \
-		const char *opt_name; \
-		enum config_option_type_t opt_type; \
-		union { \
-			TYPES_LIST(MK_OPT_VAR) \
-		}; \
+enum config_option_type_t {
+	TYPES(MK_OPT_TYPE)
+};
+struct program_config_t {
+	const char *opt_name;
+	enum config_option_type_t opt_type;
+	union {
+		TYPES(MK_OPT_VAR)
 	};
-
-MK_TYPES(TYPES)
+};
 
 #endif // __X_CONFIG_H__

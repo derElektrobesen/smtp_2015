@@ -17,6 +17,7 @@ INC_DIR = include
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 INCLUDES = $(wildcard $(INC_DIR)/*.h)
 
+COMMON_INCLUDES = $(wildcard $(COMMON_DIR)/$(INC_DIR)/*.h)
 COMMON_OBJS = $(wildcard $(COMMON_DIR)/$(OBJ_DIR)/*.o)
 
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
@@ -26,7 +27,7 @@ all: _server
 
 _server: dirs server
 
-$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(INCLUDES)
+$(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(INCLUDES) $(COMMON_INCLUDES)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 server: $(OBJECTS)
