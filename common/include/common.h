@@ -9,4 +9,7 @@
 #	define __ATTR_FORMAT__(...)
 #endif
 
+#define VSIZE(name) sizeof(name) / sizeof(*name)
+#define V_VSIZE(name) name, VSIZE(name)
+
 #endif // __COMMON_H__

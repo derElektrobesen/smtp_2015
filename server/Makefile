@@ -3,7 +3,9 @@ CFLAGS ?=
 LDFLAGS ?=
 
 EXTRA_CFLAGS =
-COMMON_DIR = ../common
+
+CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+COMMON_DIR = $(CURRENT_DIR)/../common
 
 # TODO: move this def into parent Makefile
 INCLUDE_PATHS = $(COMMON_DIR)/include include
@@ -15,7 +17,7 @@ INC_DIR = include
 SOURCES = $(wildcard $(SRC_DIR)/*.c)
 INCLUDES = $(wildcard $(INC_DIR)/*.h)
 
-COMMON_OBJS = $(wildcard ($COMMON_DIR)/$(OBJ_DIR)/*.o)
+COMMON_OBJS = $(wildcard $(COMMON_DIR)/$(OBJ_DIR)/*.o)
 
 OBJECTS = $(SOURCES:$(SRC_DIR)/%.c=$(OBJ_DIR)/%.o)
 override CFLAGS += $(INCLUDE_PATHS:%=-I%) $(EXTRA_CFLAGS)
