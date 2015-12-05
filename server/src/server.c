@@ -30,6 +30,7 @@ static int hostname_to_ip(const char *hostname, char ip[32])
 	for (i = 0; addr_list[i] != NULL; i++) {
 		//Return the first one;
 		strcpy(ip , inet_ntoa(*addr_list[i]) );
+		log_trace("Address %s was resolved to %s", hostname, ip);
 		return 0;
 	}
 
@@ -46,7 +47,7 @@ static int mk_server() {
 	memset(&addr, 0, sizeof(addr));
 
 	uint16_t port = 0;
-	if (get_opt_listen_port() <= 0 || get_opt_listen_port() >= (1u << sizeof(port))) {
+	if (get_opt_listen_port() <= 0 || get_opt_listen_port() >= (1u << (sizeof(port) * 8))) {
 		log_error("Invalid port value: %d", get_opt_listen_port());
 		return -1;
 	}
@@ -112,8 +113,4 @@ void run_server() {
 		log_error("Can't create server. Stop");
 		return;
 	}
-
-	int server_sock = mk_server();
-	if (server_sock <= 0)
-		return; // error already printed
 }

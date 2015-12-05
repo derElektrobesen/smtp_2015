@@ -32,7 +32,7 @@ int drop_privileges(const char *user, const char *group, const char *dir) {
 		action = "mkdir";
 	}
 
-	if (ret != EACCES) {
+	if (ret != 0) {
 		log_error("Can't %s %s: %s", action, dir, strerror(errno));
 		return -1;
 	}

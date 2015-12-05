@@ -44,7 +44,6 @@ int main (int argc, const char **argv) {
 	if (read_config(cmd_line_opts_list[OPT_CONFIG].s_val) != 0)
 		return -1;
 
-	// TODO: make daemonization and chenge user privileges here
 	run_server();
 
 	return 0;
