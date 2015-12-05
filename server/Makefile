@@ -30,8 +30,8 @@ _server: dirs server
 $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c $(INCLUDES) $(COMMON_INCLUDES)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-server: $(OBJECTS)
-	$(CC) -o $@ $^ $(COMMON_OBJS) $(CFLAGS) $(LDFLAGS)
+server: $(OBJECTS) $(COMMON_OBJS)
+	$(CC) -o $@ $^ $(LDFLAGS)
 
 dirs: $(OBJ_DIR)
 

@@ -1,18 +1,7 @@
-#include "program_config.h"
+#include "config.h"
 #include "logger.h"
 
 #include "command_line_options_parser.h"
-
-#define CONFIG_SPEC(_) \
-	_(user, STR) \
-	_(group, STR) \
-	_(listen_host, STR) \
-	_(listen_port, INT) \
-	_(root_dir, STR) \
-	_(queue_dir, STR) \
-	_(n_workers, INT) \
-
-SET_CONFIG_SPEC(CONFIG_SPEC)
 
 enum {
 	OPT_LOG_LVL = 0,
@@ -25,6 +14,8 @@ static struct cmd_line_opt_t cmd_line_opts_list[] = { // list of options
 	[OPT_CONFIG] =	{ .name = { "-c", "--config" },		.descr = "config fine path",	.opt_type = OPT_TYPE_STR, },
 	[OPT_HELP] =	{ .name = { "-h", "--help" },		.descr = "show this help",	.opt_type = OPT_TYPE_HELP, },
 };
+
+MK_CONFIG_GETTERS(CONFIG_SPEC)
 
 int main (int argc, const char **argv) {
 	set_log_level(LOG_ERROR);
@@ -48,6 +39,7 @@ int main (int argc, const char **argv) {
 
 	set_log_level(cmd_line_opts_list[OPT_LOG_LVL].i_val);
 
+	DEF_CONFIG(CONFIG_SPEC);
 	read_config(cmd_line_opts_list[OPT_CONFIG].s_val);
 
 	return 0;

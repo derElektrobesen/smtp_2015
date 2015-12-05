@@ -2,6 +2,7 @@
 #define __COMMON_H__
 
 #include "assert.h"
+#include "string.h"
 
 #ifdef __GNUC__
 #	define __ATTR_FORMAT__(args...) __attribute__ (( format( args ) ))
