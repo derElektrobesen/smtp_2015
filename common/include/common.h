@@ -13,4 +13,6 @@
 #define VSIZE(name) sizeof(name) / sizeof(*name)
 #define V_VSIZE(name) name, VSIZE(name)
 
+int drop_privileges(const char *user, const char *group, const char *dir);
+
 #endif // __COMMON_H__

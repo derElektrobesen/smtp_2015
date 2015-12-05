@@ -1,9 +1,7 @@
 *~
 */*~
-.*
-*/.*
-
-server
-client
-
+*.swp
+*/*.swp
+server/server
+client/client
 */obj/*

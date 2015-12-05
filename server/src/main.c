@@ -1,5 +1,6 @@
 #include "config.h"
 #include "logger.h"
+#include "server.h"
 
 #include "command_line_options_parser.h"
 
@@ -42,6 +43,9 @@ int main (int argc, const char **argv) {
 	DEF_CONFIG(CONFIG_SPEC);
 	if (read_config(cmd_line_opts_list[OPT_CONFIG].s_val) != 0)
 		return -1;
+
+	// TODO: make daemonization and chenge user privileges here
+	run_server();
 
 	return 0;
 }

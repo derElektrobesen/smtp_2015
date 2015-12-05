@@ -96,7 +96,7 @@ static option_parser_t options_parsers[] = {
 int __read_config(struct option_t *options, unsigned opts_count, const char *path) {
 	assert(opts_count < VSIZE(program_config));
 
-	struct config_t config;
+	struct config_t config __attribute__((cleanup(config_destroy)));
 	config_init(&config);
 
 	log_trace("Reading config file %s...", path);
