@@ -99,6 +99,8 @@ static int mk_server() {
 		return -1;
 	}
 
+	log_info("Listening on %s:%d", get_opt_listen_host(), get_opt_listen_port());
+
 	return sock;
 }
 
@@ -107,10 +109,51 @@ struct queue_t {
 	
 };
 
+static void mk_worker(int sock) {
+	log_info("Trying to create new worker");
+}
+
+static void run_loop(int server_socket) {
+	fd_set active_fd_set, read_fd_set;
+
+	FD_ZERO(&active_fd_set);
+	FD_SET(server_socket, &active_fd_set);
+
+	while (1) {
+		read_fd_set = active_fd_set;
+		if (select (FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
+			log_error("Select failed: %s", strerror(errno));
+			return;
+		}
+
+		int i = 0;
+		for (; i < FD_SETSIZE; ++i) {
+			if (FD_ISSET (i, &read_fd_set)) {
+				if (i == server_socket) {
+					// Establish connection with client
+					struct sockaddr_in clientname;
+					socklen_t size = sizeof(clientname);
+
+					int new = accept(server_socket, (struct sockaddr *) &clientname, &size);
+					if (new < 0) {
+						log_error("Can't accept new client: %s", strerror(errno));
+						break;
+					}
+
+					log_info("Connection with %s:%d was established", inet_ntoa(clientname.sin_addr), ntohs(clientname.sin_port));
+					mk_worker(new);
+				}
+			}
+		}
+	}
+}
+
 void run_server() {
 	int server_socket = mk_server();
 	if (server_socket < 0) {
 		log_error("Can't create server. Stop");
 		return;
 	}
+
+	run_loop(server_socket);
 }

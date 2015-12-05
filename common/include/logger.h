@@ -19,9 +19,9 @@ enum {
 };
 
 #ifdef LOG_PATH
-#	define _log_impl(lvl, sym, fmt, ...) log_impl(lvl, "[%c] " fmt "\n", sym, ##__VA_ARGS__)
-#else
 #	define _log_impl(lvl, sym, fmt, ...) log_impl(lvl, "[%c] %s:%d " fmt "\n", sym, __FILE__, __LINE__, ##__VA_ARGS__)
+#else
+#	define _log_impl(lvl, sym, fmt, ...) log_impl(lvl, "[%c] " fmt "\n", sym, ##__VA_ARGS__)
 #endif
 
 #define log_error(fmt, ...)	_log_impl(LOG_ERROR, __LOG_ERR, fmt, ##__VA_ARGS__)

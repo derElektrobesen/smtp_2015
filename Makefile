@@ -2,7 +2,7 @@ CC ?=
 CFLAGS ?=
 LDFLAGS ?=
 
-EXTRA_FLAGS ?= -Wall -Werror -DLOG_PATH -Wconversion -std=c99
+EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99
 EXTRA_LDFLASG ?= -flto -lconfig
 
 CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
