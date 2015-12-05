@@ -65,6 +65,12 @@ static int mk_server() {
 		return -1;
 	}
 
+	int val = 1;
+	if (setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val)) != 0) {
+		log_error("Can't setsockopt: %s", strerror(errno));
+		return -1;
+	}
+
 	if (bind(sock, (struct sockaddr *)&addr, sizeof(struct sockaddr)) != 0) {
 		log_error("Can't bind on %s:%d: %s", get_opt_listen_host(), get_opt_listen_port(), strerror(errno));
 		close(sock);
