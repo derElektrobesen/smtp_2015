@@ -42,7 +42,6 @@ STATE_MACHINE(cmd_line_opts, STATE_MACHINE_STATES_LIST, struct cmd_line_opts_t *
 STATE_MACHINE_CB(cmd_line_opts, parse_int_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have an integer value", options->cur_opt->name[1]);
-		return 100;
 		return STATE(cmd_line_opts, PARSE_OPT_TYPE_HELP);
 	}
 

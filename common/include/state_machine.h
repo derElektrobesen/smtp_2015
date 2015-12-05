@@ -77,7 +77,6 @@
 	while (current_state != STATE(name, finish_state)) { \
 		assert(current_state > STATE(name, FIRST) && current_state < STATE(name, MAX_ID)); \
 		STATE_MACHINE_STATE_TYPE(name) new_state = __state_machine_## name ##_states_list[current_state](userdata); \
-		log_error("PREV_STATE: %d, NEW_STATE: %d", current_state, new_state); \
 		current_state = new_state; \
 	} \
 })
