@@ -40,7 +40,8 @@ int main (int argc, const char **argv) {
 	set_log_level(cmd_line_opts_list[OPT_LOG_LVL].i_val);
 
 	DEF_CONFIG(CONFIG_SPEC);
-	read_config(cmd_line_opts_list[OPT_CONFIG].s_val);
+	if (read_config(cmd_line_opts_list[OPT_CONFIG].s_val) != 0)
+		return -1;
 
 	return 0;
 }

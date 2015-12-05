@@ -1,5 +1,5 @@
-#ifndef __X_CONFIG_H__
-#define __X_CONFIG_H__
+#ifndef __PROGRAM_CONFIG_H__
+#define __PROGRAM_CONFIG_H__
 
 #include "common.h"
 
@@ -36,7 +36,7 @@
 //			_(callback, varname, real_type)
 #define _INT(_)		_(lookup_int, i_val, int)
 #define _STR(_)		_(lookup_string, s_val, const char *)
-#define _FLOAT(_)	_(lookup_float, f_val, float)
+#define _FLOAT(_)	_(lookup_float, f_val, double)
 #define _BOOL(_)	_(lookup_bool, b_val, int)
 
 #define TO_TYPE(type) _##type
@@ -90,7 +90,7 @@ TYPES(MK_OPT_GETTER)
 
 // read_config should be called on program initialize
 #define read_config(path) __read_config(V_VSIZE(__just_a_config), path)
-int __read_config(struct option_t *config, int options_count, const char *path);
+int __read_config(struct option_t *config, unsigned options_count, const char *path);
 void deinitialize_config();
 
-#endif // __X_CONFIG_H__
+#endif // __PROGRAM_CONFIG_H__

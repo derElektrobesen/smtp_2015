@@ -6,18 +6,18 @@
 #include <stdlib.h>
 
 static struct option_t program_config[1024]; // max 1024 options are expected
-static int options_count;
+static unsigned options_count;
 
 #define MK_OPT_GETTER_FUNC(T) TO_TYPE(T)(GETTER_TYPE) MK_GETTER_NAME(T)(enum config_option_type_t opt) { return program_config[opt].TO_TYPE(T)(GETTER_VAR); }
 TYPES(MK_OPT_GETTER_FUNC)
 
 struct config_iter_t {
 	struct option_t *it;
-	int n_options;
-	int offset;
+	unsigned n_options;
+	unsigned offset;
 };
 
-static struct config_iter_t new_iter(struct option_t *options, int options_count) {
+static struct config_iter_t new_iter(struct option_t *options, unsigned options_count) {
 	struct config_iter_t it;
 	memset(&it, 0, sizeof(it));
 	it.it = options;
@@ -38,18 +38,50 @@ static struct option_t *next_iter(struct config_iter_t *iter) {
 }
 
 static int lookup_int(struct config_t *config, struct option_t *opt) {
+	int ret = config_lookup_int(config, opt->opt_name, &opt->i_val);
+	if (ret != CONFIG_TRUE) {
+		log_error("Option %s not found or have invalid type: integer expected", opt->opt_name);
+		return -1;
+	}
+
+
+	log_info("Config option read: %s = %d", opt->opt_name, opt->i_val);
 	return 0;
 }
 
 static int lookup_string(struct config_t *config, struct option_t *opt) {
+	const char *opt_val;
+	int ret = config_lookup_string(config, opt->opt_name, &opt_val);
+	if (ret != CONFIG_TRUE) {
+		log_error("Option %s not found or have invalid type: string expected", opt->opt_name);
+		return -1;
+	}
+
+	opt->s_val = strdup(opt_val);
+
+	log_info("Config option read: %s = %s", opt->opt_name, opt->s_val);
 	return 0;
 }
 
 static int lookup_float(struct config_t *config, struct option_t *opt) {
+	int ret = config_lookup_float(config, opt->opt_name, &opt->f_val);
+	if (ret != CONFIG_TRUE) {
+		log_error("Option %s not found or have invalid type: float expected", opt->opt_name);
+		return -1;
+	}
+
+	log_info("Config option read: %s = %f", opt->opt_name, opt->f_val);
 	return 0;
 }
 
 static int lookup_bool(struct config_t *config, struct option_t *opt) {
+	int ret = config_lookup_bool(config, opt->opt_name, &opt->b_val);
+	if (ret != CONFIG_TRUE) {
+		log_error("Option %s not found or have invalid type: bool expected", opt->opt_name);
+		return -1;
+	}
+
+	log_info("Config option read: %s = %d", opt->opt_name, opt->b_val);
 	return 0;
 }
 
@@ -61,11 +93,13 @@ static option_parser_t options_parsers[] = {
 	TYPES(MK_LOCAL_PARSER)
 };
 
-int __read_config(struct option_t *options, int opts_count, const char *path) {
+int __read_config(struct option_t *options, unsigned opts_count, const char *path) {
 	assert(opts_count < VSIZE(program_config));
 
 	struct config_t config;
 	config_init(&config);
+
+	log_trace("Reading config file %s...", path);
 
 	int ret = config_read_file(&config, path);
 	if (ret != CONFIG_TRUE) {
@@ -77,8 +111,12 @@ int __read_config(struct option_t *options, int opts_count, const char *path) {
 	struct config_iter_t it = new_iter(options, opts_count);
 	while ((opt = next_iter(&it))) {
 		assert(opt->opt_type < CONFIG_OPT_TYPE_MAX_OPT_INDEX && opt->opt_type > CONFIG_OPT_TYPE_MIN_OPT_INDEX);
-		if (options_parsers[opt->opt_type](&config, opt) != 0)
+
+		log_trace("Reading config option %s...", opt->opt_name);
+		if (options_parsers[opt->opt_type](&config, opt) != 0) {
+			log_error("Can't parse config %s", path);
 			return -1;
+		}
 	}
 
 	memcpy(program_config, options, sizeof(*options) * opts_count);

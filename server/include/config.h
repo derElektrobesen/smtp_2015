@@ -1,3 +1,6 @@
+#ifndef __CONFIG_H__
+#define __CONFIG_H__
+
 #include "program_config.h"
 
 #define CONFIG_SPEC(_) \
@@ -10,3 +13,5 @@
 	_(n_workers, INT) \
 
 SET_CONFIG_SPEC(CONFIG_SPEC)
+
+#endif // __CONFIG_H__

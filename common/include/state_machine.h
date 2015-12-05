@@ -36,20 +36,23 @@
 #define STATE_MACHINE_STATE_TYPE(name) enum __state_machine_## name ##_state_t
 #define STATE_MACHINE_CB_TYPE(name) __state_machine_## name ##_callback_t
 
-#define __DECLARE_STATE_NAME_IMPL(_, name, cb) name,
+#define __DECLARE_STATE_NAME_IMPL(sname, name, cb) __state_machine_## sname ##_state_## name
+
+#define STATE(machine_name, state_name) __DECLARE_STATE_NAME_IMPL(machine_name, state_name, _)
+#define __COMMA_STATE(sname, name, _) STATE(sname, name),
 
 #define __DECLARE_STATES_TYPES(name, STATES_LIST) \
 	STATE_MACHINE_STATE_TYPE(name) { \
-		STATE_## name ##_FIRST = 0, \
-		STATES_LIST(name, __DECLARE_STATE_NAME_IMPL) \
-		STATE_## name ##_MAX_ID \
+		STATE(name, FIRST) = 0, \
+		STATES_LIST(name, __COMMA_STATE) \
+		STATE(name, MAX_ID) \
 	};
 
-#define __DECLARE_STATE_IMPL(_, name, cb_name) [name] = __state_machine_## cb_name ##_state,
+#define __DECLARE_STATE_IMPL(sname, name, cb_name) [STATE(sname, name)] = __state_machine_## cb_name ##_state,
 
 #define __DECLARE_STATES(name, STATES_LIST) \
 	static STATE_MACHINE_CB_TYPE(name) __state_machine_## name ##_states_list[] = { \
-		[STATE_## name ##_FIRST] = NULL, \
+		[STATE(name, FIRST)] = NULL, \
 		STATES_LIST(name, __DECLARE_STATE_IMPL) \
 	};
 
@@ -70,10 +73,12 @@
 	__DECLARE_STATES(name, STATES_LIST)
 
 #define STATE_MACHINE_RUN(name, userdata, initial_state, finish_state) ({ \
-	STATE_MACHINE_STATE_TYPE(name) current_state = initial_state; \
-	while (current_state != finish_state) { \
-		assert(current_state > STATE_## name ##_FIRST && current_state < STATE_## name ##_MAX_ID); \
-		current_state = __state_machine_## name ##_states_list[current_state](userdata); \
+	STATE_MACHINE_STATE_TYPE(name) current_state = STATE(name, initial_state); \
+	while (current_state != STATE(name, finish_state)) { \
+		assert(current_state > STATE(name, FIRST) && current_state < STATE(name, MAX_ID)); \
+		STATE_MACHINE_STATE_TYPE(name) new_state = __state_machine_## name ##_states_list[current_state](userdata); \
+		log_error("PREV_STATE: %d, NEW_STATE: %d", current_state, new_state); \
+		current_state = new_state; \
 	} \
 })
 

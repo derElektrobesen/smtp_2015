@@ -42,7 +42,8 @@ STATE_MACHINE(cmd_line_opts, STATE_MACHINE_STATES_LIST, struct cmd_line_opts_t *
 STATE_MACHINE_CB(cmd_line_opts, parse_int_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have an integer value", options->cur_opt->name[1]);
-		return OPT_TYPE_HELP;
+		return 100;
+		return STATE(cmd_line_opts, PARSE_OPT_TYPE_HELP);
 	}
 
 	const char *opt_val = options->argv[options->cur_arg_index++];
@@ -58,39 +59,39 @@ STATE_MACHINE_CB(cmd_line_opts, parse_int_opt, options) {
 
 	if (!valid) {
 		log_error("Option '%s' should have an integer value", options->cur_opt->name[1]);
-		return OPT_TYPE_HELP;
+		return STATE(cmd_line_opts, PARSE_OPT_TYPE_HELP);
 	}
 
 	options->cur_opt->i_val = atoi(opt_val);
-	return NO_OPT;
+	return STATE(cmd_line_opts, NO_OPT);
 }
 
 STATE_MACHINE_CB(cmd_line_opts, parse_str_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have a string value", options->cur_opt->name[1]);
-		return OPTS_PARSING_DONE;
+		return STATE(cmd_line_opts, OPTS_PARSING_DONE);
 	}
 
 	const char *opt_val = options->argv[options->cur_arg_index++];
 
 	options->cur_opt->s_val = opt_val;
-	return NO_OPT;
+	return STATE(cmd_line_opts, NO_OPT);
 }
 
 static struct {
 	enum cmd_line_opt_type_t opt_type;
 	STATE_MACHINE_STATE_TYPE(cmd_line_opts) state;
 } type_vs_state[] = {
-	{ .opt_type = OPT_TYPE_INT, .state = PARSE_OPT_TYPE_INT, },
-	{ .opt_type = OPT_TYPE_STR, .state = PARSE_OPT_TYPE_STR, },
-	{ .opt_type = OPT_TYPE_HELP, .state = PARSE_OPT_TYPE_HELP, },
+	{ .opt_type = OPT_TYPE_INT, .state = STATE(cmd_line_opts, PARSE_OPT_TYPE_INT), },
+	{ .opt_type = OPT_TYPE_STR, .state = STATE(cmd_line_opts, PARSE_OPT_TYPE_STR), },
+	{ .opt_type = OPT_TYPE_HELP, .state = STATE(cmd_line_opts, PARSE_OPT_TYPE_HELP), },
 };
 
 STATE_MACHINE_CB(cmd_line_opts, next_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_trace("Iteration over options done");
 		options->done = 1;
-		return OPTS_PARSING_DONE;
+		return STATE(cmd_line_opts, OPTS_PARSING_DONE);
 	}
 
 	const char *opt_name = options->argv[options->cur_arg_index++];
@@ -112,7 +113,7 @@ STATE_MACHINE_CB(cmd_line_opts, next_opt, options) {
 	}
 
 	log_error("Option with name '%s' not found", opt_name);
-	return OPT_TYPE_HELP;
+	return STATE(cmd_line_opts, PARSE_OPT_TYPE_HELP);
 }
 
 STATE_MACHINE_CB(cmd_line_opts, print_help, options) {
@@ -124,7 +125,7 @@ STATE_MACHINE_CB(cmd_line_opts, print_help, options) {
 		printf("\t%s (%s)\t-- %s\n", cur_opt->name[0], cur_opt->name[1], cur_opt->descr);
 	}
 
-	return OPTS_PARSING_DONE;
+	return STATE(cmd_line_opts, OPTS_PARSING_DONE);
 }
 
 int parse_command_line_arguments(struct cmd_line_opt_t *opts, int opts_count, int argc, const char **argv) {
