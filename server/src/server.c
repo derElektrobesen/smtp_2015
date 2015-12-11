@@ -141,12 +141,12 @@ struct fds_process_status_t {
 };
 
 #define STATES_LIST(ARG, _) \
-	_(ARG, WAIT_CONN, wait_connection, initial_state) \
-	_(ARG, ERROR, process_error) \
-	_(ARG, PROCESS_FDS, process_fds) \
-	_(ARG, PROCESS_ERROR_FD, process_error_fd) \
-	_(ARG, PROCESS_SERVER_FD, process_server_fd) \
-	_(ARG, STOP_SERVER)
+	_(ARG, WAIT_CONN, FSM_INIT_STATE) \
+	_(ARG, ERROR) \
+	_(ARG, PROCESS_FDS) \
+	_(ARG, PROCESS_ERROR_FD) \
+	_(ARG, PROCESS_SERVER_FD) \
+	_(ARG, STOP_SERVER, FSM_LAST_STATE)
 
 struct server_status_t;
 FSM(server, STATES_LIST, struct server_status_t *);
@@ -165,7 +165,7 @@ struct server_status_t {
 	struct fds_process_status_t fds_process_status;
 };
 
-FSM_CB(server, wait_connection, server_status) {
+FSM_CB(server, WAIT_CONN, server_status) {
 	if (select(FD_SETSIZE, &server_status->active_fd_set, NULL, &server_status->error_fd_set, NULL) < 0) {
 		log_error("Select failed: %s", strerror(errno));
 		return ERROR;
@@ -175,7 +175,7 @@ FSM_CB(server, wait_connection, server_status) {
 	return PROCESS_FDS;
 }
 
-FSM_CB(server, process_fds, server_status) {
+FSM_CB(server, PROCESS_FDS, server_status) {
 	struct fds_process_status_t *status = &server_status->fds_process_status;
 
 	if (!status->error_fds_processed && ++status->current_socket >= FD_SETSIZE) {
@@ -188,7 +188,7 @@ FSM_CB(server, process_fds, server_status) {
 	return PROCESS_ERROR_FD;
 }
 
-FSM_CB(server, process_error_fd, server_status) {
+FSM_CB(server, PROCESS_ERROR_FD, server_status) {
 	if (FD_ISSET(server_status->fds_process_status.current_socket, &server_status->error_fd_set)) {
 		close(server_status->fds_process_status.current_socket);
 		FD_CLR(server_status->fds_process_status.current_socket, &server_status->error_fd_set);
@@ -197,7 +197,7 @@ FSM_CB(server, process_error_fd, server_status) {
 	return PROCESS_FDS;
 }
 
-FSM_CB(server, process_server_fd, server_status) {
+FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 	if (!FD_ISSET(server_status->server_socket, &server_status->active_fd_set))
 		return PROCESS_FDS;
 
@@ -226,7 +226,7 @@ FSM_CB(server, process_server_fd, server_status) {
 	return PROCESS_FDS;
 }
 
-FSM_CB(server, process_error, server_status) {
+FSM_CB(server, ERROR, server_status) {
 	if (server_status->error_socket) {
 		if (server_status->err_msg[0] == '\0')
 			snprintf(server_status->err_msg, sizeof(server_status->err_msg), "unknown error");

@@ -31,15 +31,15 @@ void init_cmd_line_opts(struct cmd_line_opts_t *opts, int argc, const char **arg
 }
 
 #define FSM_STATES_LIST(ARG, _) \
-	_(ARG, NO_OPT, next_opt, initial_state) \
-	_(ARG, PARSE_OPT_TYPE_INT, parse_int_opt) \
-	_(ARG, PARSE_OPT_TYPE_STR, parse_str_opt) \
-	_(ARG, PARSE_OPT_TYPE_HELP, print_help) \
-	_(ARG, OPTS_PARSING_DONE)
+	_(ARG, NO_OPT, FSM_INIT_STATE) \
+	_(ARG, PARSE_OPT_TYPE_INT) \
+	_(ARG, PARSE_OPT_TYPE_STR) \
+	_(ARG, PARSE_OPT_TYPE_HELP) \
+	_(ARG, OPTS_PARSING_DONE, FSM_LAST_STATE)
 
 FSM(cmd_line_opts, FSM_STATES_LIST, struct cmd_line_opts_t *);
 
-FSM_CB(cmd_line_opts, parse_int_opt, options) {
+FSM_CB(cmd_line_opts, PARSE_OPT_TYPE_INT, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have an integer value", options->cur_opt->name[1]);
 		return PARSE_OPT_TYPE_HELP;
@@ -65,7 +65,7 @@ FSM_CB(cmd_line_opts, parse_int_opt, options) {
 	return NO_OPT;
 }
 
-FSM_CB(cmd_line_opts, parse_str_opt, options) {
+FSM_CB(cmd_line_opts, PARSE_OPT_TYPE_STR, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have a string value", options->cur_opt->name[1]);
 		return OPTS_PARSING_DONE;
@@ -86,7 +86,7 @@ static struct {
 	{ .opt_type = OPT_TYPE_HELP, .state = PARSE_OPT_TYPE_HELP, },
 };
 
-FSM_CB(cmd_line_opts, next_opt, options) {
+FSM_CB(cmd_line_opts, NO_OPT, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_trace("Iteration over options done");
 		options->done = 1;
@@ -115,7 +115,7 @@ FSM_CB(cmd_line_opts, next_opt, options) {
 	return PARSE_OPT_TYPE_HELP;
 }
 
-FSM_CB(cmd_line_opts, print_help, options) {
+FSM_CB(cmd_line_opts, PARSE_OPT_TYPE_HELP, options) {
 	printf("Usage: %s [options]\n", options->argv[0]);
 
 	int i = 0;
