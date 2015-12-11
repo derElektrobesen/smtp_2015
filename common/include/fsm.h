@@ -1,15 +1,15 @@
 #ifndef __FSM_H__
 #define __FSM_H__
 
-/* XXX: define FSM_STATES_LIST before include this module:
- * #define FSM_STATES_LIST(ARG, _) \
+/* XXX: define STATES_LIST in a following format:
+ * #define STATES_LIST(ARG, _) \
  *	_(ARG, INIT_STATE, some_callback, initial_state) \
  *	_(ARG, ANOTHER_STATE, other_callback) \
  *	etc... \
  *	_(ARG, LAST_STATE)
  * Arg should be passed as first arg to '_'
  * After defining this macro, include this module and call following macro:
- *	FSM(state_machine_name, userdata_t)
+ *	FSM(state_machine_name, STATES_LIST, userdata_t)
  *
  * Initial state should be defined via _() with 4 arguments (see example above).
  * Forth argument will be ignored and will be used just a flag.
@@ -107,7 +107,7 @@
 	static FSM_STATE_TYPE(name) __FSM_FIRST_STATE_NAME(name) = state;
 #define __FSM_DECLARE_LAST_STATE(name, state) \
 	static FSM_STATE_TYPE(name) __FSM_LAST_STATE_NAME(name) = state; \
-	FSM_CB(name, LAST_STATE, arg __attribute__((unused))) { assert(!"This function never shouldn't be called!"); }
+	FSM_CB(name, LAST_STATE, arg __attribute__((unused))) { assert(!"This function never should be called!"); }
 
 #define __FSM_DECLARE_FIRST_AND_LAST_STATES_IMPL(...) \
 	__FSM_GET_MACRO(__VA_ARGS__, __FSM_DECLARE_FIRST_STATE, __FSM_DUMMY_MACRO, __FSM_DECLARE_LAST_STATE)(__VA_ARGS__)
