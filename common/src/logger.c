@@ -27,3 +27,7 @@ void log_impl(int lvl, const char *fmt, ...) {
 
 	va_end(ap);
 }
+
+void reinit_logger() {
+	// Child process should write logs into another socket
+}
