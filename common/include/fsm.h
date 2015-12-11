@@ -87,9 +87,9 @@
 #define __FSM_PREDECLARE_FUNCTION_IMPL(...) \
 	__FSM_GET_MACRO(__VA_ARGS__, __FSM_PREDECLARE_FUNCTION_IMPL_3, __FSM_PREDECLARE_FUNCTION_IMPL_3, __FSM_PREDECLARE_FUNCTION_IMPL_2)(__VA_ARGS__)
 
-#define __FSM_STATE_TYPE_T(name) struct __fsm_## name ##_state_type_t
+#define __FSM_LOCAL_STATE_TYPE(name) struct __fsm_## name ##_state_type_t
 #define __FSM_DECLARE_SINGLE_STATE_3(name, state, cb, ...) \
-	inline static __FSM_STATE_TYPE_T(name) state() { return (__FSM_STATE_TYPE_T(name)){ .st = __FSM_STATE(name, state), }; }
+	inline static __FSM_LOCAL_STATE_TYPE(name) state() { return (__FSM_LOCAL_STATE_TYPE(name)){ .st = __FSM_STATE(name, state), }; }
 #define __FSM_DECLARE_SINGLE_STATE_2(name, state) \
 	__FSM_DECLARE_SINGLE_STATE_3(name, state, LAST_STATE)
 
@@ -117,10 +117,10 @@
 
 #define FSM(name, STATES_LIST, userdata_t) \
 	__FSM_DECLARE_STATES_LIST(name, STATES_LIST) \
-	typedef __FSM_STATE_TYPE_T(name) (*FSM_STATE_TYPE(name))(); \
+	typedef __FSM_LOCAL_STATE_TYPE(name) (*FSM_STATE_TYPE(name))(); \
 	typedef FSM_STATE_TYPE(name) (*__FSM_CB_TYPE(name))(userdata_t user_data); \
 	typedef userdata_t __FSM_USERDATA_T_NAME(name); \
-	__FSM_STATE_TYPE_T(name) { __FSM_STATE_TYPE_LOCAL(name) st; }; \
+	__FSM_LOCAL_STATE_TYPE(name) { __FSM_STATE_TYPE_LOCAL(name) st; }; \
 	__FSM_PREDECLARE_FUNCTIONS(name, STATES_LIST) \
 	__FSM_DECLARE_STATES(name, STATES_LIST) \
 	__FSM_DECLARE_FIRST_AND_LAST_STATES(name, STATES_LIST)
