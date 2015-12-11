@@ -1,6 +1,6 @@
 #include "command_line_options_parser.h"
 #include "logger.h"
-#include "state_machine.h"
+#include "fsm.h"
 
 #include <stdlib.h>
 #include <ctype.h>
@@ -30,16 +30,16 @@ void init_cmd_line_opts(struct cmd_line_opts_t *opts, int argc, const char **arg
 	opts->options_count = options_count;
 }
 
-#define STATE_MACHINE_STATES_LIST(ARG, _) \
+#define FSM_STATES_LIST(ARG, _) \
 	_(ARG, NO_OPT, next_opt, initial_state) \
 	_(ARG, PARSE_OPT_TYPE_INT, parse_int_opt) \
 	_(ARG, PARSE_OPT_TYPE_STR, parse_str_opt) \
 	_(ARG, PARSE_OPT_TYPE_HELP, print_help) \
 	_(ARG, OPTS_PARSING_DONE)
 
-STATE_MACHINE(cmd_line_opts, STATE_MACHINE_STATES_LIST, struct cmd_line_opts_t *);
+FSM(cmd_line_opts, FSM_STATES_LIST, struct cmd_line_opts_t *);
 
-STATE_MACHINE_CB(cmd_line_opts, parse_int_opt, options) {
+FSM_CB(cmd_line_opts, parse_int_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have an integer value", options->cur_opt->name[1]);
 		return PARSE_OPT_TYPE_HELP;
@@ -65,7 +65,7 @@ STATE_MACHINE_CB(cmd_line_opts, parse_int_opt, options) {
 	return NO_OPT;
 }
 
-STATE_MACHINE_CB(cmd_line_opts, parse_str_opt, options) {
+FSM_CB(cmd_line_opts, parse_str_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_error("Option '%s' should have a string value", options->cur_opt->name[1]);
 		return OPTS_PARSING_DONE;
@@ -79,14 +79,14 @@ STATE_MACHINE_CB(cmd_line_opts, parse_str_opt, options) {
 
 static struct {
 	enum cmd_line_opt_type_t opt_type;
-	STATE_MACHINE_STATE_TYPE(cmd_line_opts) state;
+	FSM_STATE_TYPE(cmd_line_opts) state;
 } type_vs_state[] = {
 	{ .opt_type = OPT_TYPE_INT, .state = PARSE_OPT_TYPE_INT, },
 	{ .opt_type = OPT_TYPE_STR, .state = PARSE_OPT_TYPE_STR, },
 	{ .opt_type = OPT_TYPE_HELP, .state = PARSE_OPT_TYPE_HELP, },
 };
 
-STATE_MACHINE_CB(cmd_line_opts, next_opt, options) {
+FSM_CB(cmd_line_opts, next_opt, options) {
 	if (options->cur_arg_index >= options->argc) {
 		log_trace("Iteration over options done");
 		options->done = 1;
@@ -115,7 +115,7 @@ STATE_MACHINE_CB(cmd_line_opts, next_opt, options) {
 	return PARSE_OPT_TYPE_HELP;
 }
 
-STATE_MACHINE_CB(cmd_line_opts, print_help, options) {
+FSM_CB(cmd_line_opts, print_help, options) {
 	printf("Usage: %s [options]\n", options->argv[0]);
 
 	int i = 0;
@@ -131,7 +131,7 @@ int parse_command_line_arguments(struct cmd_line_opt_t *opts, int opts_count, in
 	struct cmd_line_opts_t options;
 	init_cmd_line_opts(&options, argc, argv, opts, opts_count);
 
-	STATE_MACHINE_RUN(cmd_line_opts, &options);
+	FSM_RUN(cmd_line_opts, &options);
 
 	if (options.done != 1) {
 		return -1;
