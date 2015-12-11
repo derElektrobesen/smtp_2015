@@ -31,11 +31,11 @@ void init_cmd_line_opts(struct cmd_line_opts_t *opts, int argc, const char **arg
 }
 
 #define STATE_MACHINE_STATES_LIST(ARG, _) \
-	_(ARG, NO_OPT, next_opt) \
+	_(ARG, NO_OPT, next_opt, initial_state) \
 	_(ARG, PARSE_OPT_TYPE_INT, parse_int_opt) \
 	_(ARG, PARSE_OPT_TYPE_STR, parse_str_opt) \
 	_(ARG, PARSE_OPT_TYPE_HELP, print_help) \
-	_(ARG, OPTS_PARSING_DONE, next_opt)
+	_(ARG, OPTS_PARSING_DONE)
 
 STATE_MACHINE(cmd_line_opts, STATE_MACHINE_STATES_LIST, struct cmd_line_opts_t *);
 
@@ -131,7 +131,7 @@ int parse_command_line_arguments(struct cmd_line_opt_t *opts, int opts_count, in
 	struct cmd_line_opts_t options;
 	init_cmd_line_opts(&options, argc, argv, opts, opts_count);
 
-	STATE_MACHINE_RUN(cmd_line_opts, &options, NO_OPT, OPTS_PARSING_DONE);
+	STATE_MACHINE_RUN(cmd_line_opts, &options);
 
 	if (options.done != 1) {
 		return -1;

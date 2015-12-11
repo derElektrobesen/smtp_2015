@@ -46,5 +46,7 @@ int main (int argc, const char **argv) {
 
 	run_server();
 
+	deinitialize_config();
+
 	return 0;
 }
