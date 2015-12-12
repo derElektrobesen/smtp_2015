@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 
 #if !defined(VERSION) || !defined(BUILD_YEAR) || !defined(DEVELOPERS) || !defined(PROJECT)
 #	error "Pass constants above via makefile"
@@ -24,6 +25,7 @@ enum {
 };
 
 static void send_response_ex(int sock, const char *msg, size_t msg_size) {
+	log_trace("Sending to client %d: '%.*s'", sock, (int)msg_size, msg);
 	write(sock, msg, strlen(msg));
 	write(sock, STRSZ("\r\n"));
 }
@@ -70,6 +72,7 @@ static void expand_buffer(struct buffer_t *buf) {
 #define STATES(ARG, _) \
 	_(ARG, WELCOME_CLIENT, FSM_INIT_STATE) \
 	_(ARG, WAIT_DATA) \
+	_(ARG, READ_DATA) \
 	_(ARG, WAIT_COMMAND) \
 	_(ARG, CLOSE_CLIENT) \
 	_(ARG, FREE_BUF) \
@@ -109,6 +112,36 @@ FSM_CB(smtp, WAIT_COMMAND, cli) {
 }
 
 FSM_CB(smtp, WAIT_DATA, cli) {
+	fd_set read_set, err_set;
+
+	FD_ZERO(&read_set);
+	FD_SET(cli->sock, &read_set);
+
+	FD_ZERO(&err_set);
+	FD_SET(cli->sock, &err_set);
+
+	int ret = select(FD_SETSIZE, &read_set, NULL, &err_set, NULL);
+	if (ret < 0) {
+		log_error("select failed: %s", strerror(errno));
+		close(cli->sock);
+		return FREE_BUF;
+	}
+
+	if (FD_ISSET(cli->sock, &err_set)) {
+		log_info("Client %d was gone. Close connection", cli->sock);
+		close(cli->sock);
+		return FREE_BUF;
+	}
+
+	if (FD_ISSET(cli->sock, &read_set)) {
+		log_trace("Some data found on %d sock", cli->sock);
+		return READ_DATA;
+	}
+
+	return WAIT_DATA;
+}
+
+FSM_CB(smtp, READ_DATA, cli) {
 	struct buffer_t *buf = &cli->buffer;
 	if (buf->allocated - buf->used < BLOCK_SIZE)
 		expand_buffer(buf);

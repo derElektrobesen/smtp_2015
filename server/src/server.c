@@ -141,19 +141,11 @@ static int mk_server() {
 	_(ARG, INIT, FSM_INIT_STATE) \
 	_(ARG, WAIT_CONN) \
 	_(ARG, ERROR) \
-	_(ARG, PROCESS_FDS) \
-	_(ARG, PROCESS_ERROR_FD) \
 	_(ARG, PROCESS_SERVER_FD) \
 	_(ARG, STOP_SERVER, FSM_LAST_STATE)
 
 struct server_status_t;
 FSM(server, STATES_LIST, struct server_status_t *);
-
-struct fds_process_status_t {
-	uint8_t error_fds_processed;
-
-	int current_socket;
-};
 
 struct server_error_info_t {
 	int error_socket;
@@ -166,14 +158,12 @@ struct server_status_t {
 	uint8_t initialized;
 
 	fd_set active_fd_set;
-	fd_set error_fd_set;
 
 	struct server_error_info_t error_info;
-	struct fds_process_status_t fds_process_status;
 };
 
 FSM_CB(server, WAIT_CONN, server_status) {
-	if (select(FD_SETSIZE, &server_status->active_fd_set, NULL, &server_status->error_fd_set, NULL) < 0) {
+	if (select(FD_SETSIZE, &server_status->active_fd_set, NULL, NULL, NULL) < 0) {
 		if (errno == EINTR) {
 			// reinit fd sets
 			return INIT;
@@ -185,35 +175,12 @@ FSM_CB(server, WAIT_CONN, server_status) {
 
 	server_status->initialized = 0;
 
-	memset(&server_status->fds_process_status, 0, sizeof(server_status->fds_process_status));
-	return PROCESS_FDS;
-}
-
-FSM_CB(server, PROCESS_FDS, server_status) {
-	struct fds_process_status_t *status = &server_status->fds_process_status;
-
-	if (!status->error_fds_processed && ++status->current_socket >= FD_SETSIZE) {
-		log_trace("Error fds processed");
-		status->error_fds_processed = 1;
-		return PROCESS_SERVER_FD;
-	} else if (status->error_fds_processed)
-		return WAIT_CONN;
-
-	return PROCESS_ERROR_FD;
-}
-
-FSM_CB(server, PROCESS_ERROR_FD, server_status) {
-	if (FD_ISSET(server_status->fds_process_status.current_socket, &server_status->error_fd_set)) {
-		close(server_status->fds_process_status.current_socket);
-		FD_CLR(server_status->fds_process_status.current_socket, &server_status->error_fd_set);
-	}
-
-	return PROCESS_FDS;
+	return PROCESS_SERVER_FD;
 }
 
 FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 	if (!FD_ISSET(server_status->server_socket, &server_status->active_fd_set))
-		return PROCESS_FDS;
+		return WAIT_CONN;
 
 	// Establish connection with client
 	struct sockaddr_in clientname;
@@ -222,14 +189,13 @@ FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 	int new = accept(server_status->server_socket, (struct sockaddr *) &clientname, &size);
 	if (new < 0) {
 		log_error("Can't accept new client: %s", strerror(errno));
-		return PROCESS_FDS;
+		return WAIT_CONN;
 	}
 
 	log_info("Connection with %s:%d was established", inet_ntoa(clientname.sin_addr), ntohs(clientname.sin_port));
 	if (mk_worker(new) != 0) {
 		struct server_error_info_t *error_info = &server_status->error_info;
 		error_info->error_socket = new;
-		error_info->next_state = PROCESS_FDS;
 		snprintf(error_info->err_msg, sizeof(error_info->err_msg), "no more workers");
 
 		log_error("Can't start worker for %s:%d, send error message and destroy connection",
@@ -238,7 +204,7 @@ FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 		return ERROR;
 	}
 
-	return PROCESS_FDS;
+	return WAIT_CONN;
 }
 
 FSM_CB(server, ERROR, server_status) {
@@ -255,12 +221,7 @@ FSM_CB(server, ERROR, server_status) {
 
 		smtp_reject_client(error_info->error_socket, error_info->err_msg);
 
-		shutdown(error_info->error_socket, SHUT_WR);
-		FD_SET(error_info->error_socket, &server_status->error_fd_set);
-
-		if (error_info->next_state)
-			return error_info->next_state;
-
+		memset(error_info, 0, sizeof(*error_info));
 		return WAIT_CONN;
 	}
 
@@ -288,7 +249,6 @@ static void run_loop(int server_socket) {
 
 	memset(&server_status, 0, sizeof(server_status));
 	server_status.server_socket = server_socket;
-	FD_ZERO(&server_status.error_fd_set);
 
 	FSM_RUN(server, &server_status);
 }
