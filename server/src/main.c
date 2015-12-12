@@ -44,6 +44,11 @@ int main (int argc, const char **argv) {
 	if (read_config(cmd_line_opts_list[OPT_CONFIG].s_val) != 0)
 		return -1;
 
+	if (get_opt_n_workers() <= 0) {
+		log_error("n_workers parametr should be greater then zero");
+		return -1;
+	}
+
 	run_server();
 
 	deinitialize_config();

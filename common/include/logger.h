@@ -33,6 +33,6 @@ enum {
 int set_log_level(int lvl);
 void log_impl(int lvl, const char *fmt, ...) __ATTR_FORMAT__(printf, 2, 3);
 
-void reinit_logger();
+int reinit_logger();
 
 #endif // __LOGGER_H__

@@ -45,9 +45,9 @@ static int hostname_to_ip(const char *hostname, char ip[32])
 static void handle_sigchld(int sig) {
 	pid_t child_pid = 0;
 	int status = 0;
-	while ((child_pid = waitpid(-1, &status, WNOHANG))) {
+	while ((child_pid = waitpid(-1, &status, WNOHANG)) > 0) {
 		if (WIFEXITED(status))
-			log_warn("Child exited normally, status = %d", WEXITSTATUS(status));
+			log_warn("Child %d exited normally, status = %d", child_pid, WEXITSTATUS(status));
 		else {
 			char stat_str[128] = "";
 			if (WIFSIGNALED(status))
@@ -101,7 +101,10 @@ static int mk_server() {
 		return -1;
 	}
 
-	drop_privileges(get_opt_user(), get_opt_group(), get_opt_root_dir());
+	if (drop_privileges(get_opt_user(), get_opt_group(), get_opt_root_dir()) < 0) {
+		close(sock);
+		return -1;
+	}
 
 	// XXX: backlog is hardcoded
 	if (listen(sock, 3) != 0) {
@@ -135,7 +138,8 @@ static int mk_server() {
 }
 
 #define STATES_LIST(ARG, _) \
-	_(ARG, WAIT_CONN, FSM_INIT_STATE) \
+	_(ARG, INIT, FSM_INIT_STATE) \
+	_(ARG, WAIT_CONN) \
 	_(ARG, ERROR) \
 	_(ARG, PROCESS_FDS) \
 	_(ARG, PROCESS_ERROR_FD) \
@@ -160,6 +164,7 @@ struct server_error_info_t {
 
 struct server_status_t {
 	int server_socket;
+	uint8_t initialized;
 
 	fd_set active_fd_set;
 	fd_set error_fd_set;
@@ -170,9 +175,16 @@ struct server_status_t {
 
 FSM_CB(server, WAIT_CONN, server_status) {
 	if (select(FD_SETSIZE, &server_status->active_fd_set, NULL, &server_status->error_fd_set, NULL) < 0) {
+		if (errno == EINTR) {
+			// reinit fd sets
+			return INIT;
+		}
+
 		log_error("Select failed: %s", strerror(errno));
 		return ERROR;
 	}
+
+	server_status->initialized = 0;
 
 	memset(&server_status->fds_process_status, 0, sizeof(server_status->fds_process_status));
 	return PROCESS_FDS;
@@ -259,16 +271,27 @@ FSM_CB(server, ERROR, server_status) {
 	return STOP_SERVER;
 }
 
+FSM_CB(server, INIT, server_status) {
+	if (server_status->initialized) {
+		log_error("Error happens in select() loop. Shutdown");
+		return STOP_SERVER;
+	}
+
+	FD_ZERO(&server_status->active_fd_set);
+	FD_SET(server_status->server_socket, &server_status->active_fd_set);
+
+	// flag should be reset into WAIT_CONN after success select() call to prevent recursion
+	server_status->initialized = 1;
+
+	return WAIT_CONN;
+}
+
 static void run_loop(int server_socket) {
 	struct server_status_t server_status;
 
 	memset(&server_status, 0, sizeof(server_status));
 	server_status.server_socket = server_socket;
-
-	FD_ZERO(&server_status.active_fd_set);
 	FD_ZERO(&server_status.error_fd_set);
-
-	FD_SET(server_socket, &server_status.active_fd_set);
 
 	FSM_RUN(server, &server_status);
 }

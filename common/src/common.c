@@ -26,7 +26,7 @@ int drop_privileges(const char *user, const char *group, const char *dir) {
 
 	int ret = chdir(dir);
 	const char *action = "chdir";
-	if (ret == ENOENT) {
+	if (ret != 0 && errno == ENOENT) {
 		log_info("Directory %s not found. Trying to create", dir);
 		ret = mkdir(dir, 0755);
 		action = "mkdir";
