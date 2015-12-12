@@ -8,11 +8,19 @@ BUILD_YEAR = '\"$(shell date +"%Y")\"'
 PROJECT = '\"SMTP 2015\"'
 DEVELOPERS = '\"Pavel Berezhnoy <pberejnoy2005@gmail.com>\"'
 
+DEBUG ?= 0
+
+ifeq (DEBUG, 0)
+	CFLAGS += -O3 -flto
+else
+	CFLAGS += -O0 -ggdb3
+endif
+
 EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
 	-DVERSION=$(VERSION) \
 	-DBUILD_YEAR=$(BUILD_YEAR) \
 	-DDEVELOPERS=$(DEVELOPERS) \
-	-DPROJECT=$(PROJECT)
+	-DPROJECT=$(PROJECT) \
 
 EXTRA_LDFLASG ?= -flto -lconfig
 

@@ -58,7 +58,10 @@ static void handle_sigchld(int sig) {
 			log_error("Child exited abnormally, %s", stat_str);
 		}
 
-		destroy_worker(child_pid);
+		if (child_pid == logger_pid())
+			log_error("Logger died"); // TODO: reinit logger ?
+		else
+			destroy_worker(child_pid);
 	}
 }
 

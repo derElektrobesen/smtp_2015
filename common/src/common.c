@@ -24,22 +24,24 @@ int drop_privileges(const char *user, const char *group, const char *dir) {
 		return -1;
 	}
 
-	int ret = chdir(dir);
-	const char *action = "chdir";
-	if (ret != 0 && errno == ENOENT) {
-		log_info("Directory %s not found. Trying to create", dir);
-		ret = mkdir(dir, 0755);
-		action = "mkdir";
-	}
+	if (dir) {
+		int ret = chdir(dir);
+		const char *action = "chdir";
+		if (ret != 0 && errno == ENOENT) {
+			log_info("Directory %s not found. Trying to create", dir);
+			ret = mkdir(dir, 0755);
+			action = "mkdir";
+		}
 
-	if (ret != 0) {
-		log_error("Can't %s %s: %s", action, dir, strerror(errno));
-		return -1;
-	}
+		if (ret != 0) {
+			log_error("Can't %s %s: %s", action, dir, strerror(errno));
+			return -1;
+		}
 
-	if (chroot(dir) != 0) {
-		log_error("Can't chroot %s: %s", dir, strerror(errno));
-		return -1;
+		if (chroot(dir) != 0) {
+			log_error("Can't chroot %s: %s", dir, strerror(errno));
+			return -1;
+		}
 	}
 
 	if (setgid(grp->gr_gid) != 0) {

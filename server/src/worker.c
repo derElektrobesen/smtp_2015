@@ -14,6 +14,7 @@ struct worker_t {
 	pid_t pid;
 	int sock;
 	uint8_t busy;
+	int index;
 };
 
 static struct worker_t *workers = NULL;
@@ -29,6 +30,11 @@ static void init_workers() {
 	assert(workers);
 
 	memset(workers, 0, (unsigned)get_opt_n_workers() * sizeof(struct worker_t));
+
+	int i = 0;
+	for (; i < get_opt_n_workers(); ++i) {
+		workers[i].index = i;
+	}
 }
 
 static __attribute__((destructor))
@@ -91,9 +97,10 @@ static int init_worker(struct worker_t *worker) {
 	log_info("New worker created, pid = %d", pid);
 	worker->pid = pid;
 
-	close_opened_descriptors(&worker->sock, 1);
+	int except[] = { worker->sock, logger_sock() };
+	close_opened_descriptors(except, sizeof(except) / sizeof(*except));
 
-	if (reinit_logger() != 0) {
+	if (reinit_logger(worker->index) != 0) {
 		log_error("Can't reinit logger in child");
 		return -1;
 	}
@@ -117,6 +124,8 @@ static int mk_worker_impl(struct worker_t *worker) {
 		// child created
 		if (init_worker(worker) == 0) {
 			run_worker(worker);
+
+			log_info("Worker finish its work");
 
 			// TODO: don't destroy process at end.
 			exit(0);

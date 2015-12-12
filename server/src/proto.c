@@ -178,6 +178,8 @@ FSM_CB(smtp, READ_DATA, cli) {
 }
 
 FSM_CB(smtp, FREE_BUF, cli) {
+	log_trace("Trying to free buffer");
+
 	if (cli->buffer.buf)
 		free(cli->buffer.buf);
 
