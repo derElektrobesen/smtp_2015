@@ -10,10 +10,10 @@ DEVELOPERS = '\"Pavel Berezhnoy <pberejnoy2005@gmail.com>\"'
 
 DEBUG ?= 0
 
-ifeq (DEBUG, 0)
+ifeq ($(DEBUG), 0)
 	CFLAGS += -O3 -flto
 else
-	CFLAGS += -O0 -ggdb3
+	CFLAGS += -O0 -ggdb3 -DDEBUG
 endif
 
 EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \

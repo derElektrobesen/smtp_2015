@@ -262,7 +262,7 @@ static void run_logger_loop() {
 		if (res < 0) {
 			log_info("Select failed: %s", strerror(errno));
 			continue;
-		} else if (res == 0) {
+		} else if (res == 0 && timeout_ptr) {
 			// timeout
 			timeout.tv_sec = LOG_FILE_FLUSH_TIME;
 			fflush(logger_status.log_f);
