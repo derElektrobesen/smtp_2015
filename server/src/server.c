@@ -134,12 +134,6 @@ static int mk_server() {
 	return sock;
 }
 
-struct fds_process_status_t {
-	uint8_t error_fds_processed;
-
-	int current_socket;
-};
-
 #define STATES_LIST(ARG, _) \
 	_(ARG, WAIT_CONN, FSM_INIT_STATE) \
 	_(ARG, ERROR) \
@@ -151,17 +145,26 @@ struct fds_process_status_t {
 struct server_status_t;
 FSM(server, STATES_LIST, struct server_status_t *);
 
+struct fds_process_status_t {
+	uint8_t error_fds_processed;
+
+	int current_socket;
+};
+
+struct server_error_info_t {
+	int error_socket;
+	int error_code;
+	char err_msg[512];
+	FSM_STATE_TYPE(server) next_state;
+};
+
 struct server_status_t {
 	int server_socket;
 
 	fd_set active_fd_set;
 	fd_set error_fd_set;
 
-	int error_socket;
-	int error_code;
-	char err_msg[512];
-	FSM_STATE_TYPE(server) next_state;
-
+	struct server_error_info_t error_info;
 	struct fds_process_status_t fds_process_status;
 };
 
@@ -213,9 +216,10 @@ FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 
 	log_info("Connection with %s:%d was established", inet_ntoa(clientname.sin_addr), ntohs(clientname.sin_port));
 	if (mk_worker(new) != 0) {
-		server_status->error_socket = new;
-		server_status->next_state = PROCESS_FDS;
-		snprintf(server_status->err_msg, sizeof(server_status->err_msg), "no more workers");
+		struct server_error_info_t *error_info = &server_status->error_info;
+		error_info->error_socket = new;
+		error_info->next_state = PROCESS_FDS;
+		snprintf(error_info->err_msg, sizeof(error_info->err_msg), "no more workers");
 
 		log_error("Can't start worker for %s:%d, send error message and destroy connection",
 				inet_ntoa(clientname.sin_addr), ntohs(clientname.sin_port));
@@ -227,21 +231,26 @@ FSM_CB(server, PROCESS_SERVER_FD, server_status) {
 }
 
 FSM_CB(server, ERROR, server_status) {
-	if (server_status->error_socket) {
-		if (server_status->err_msg[0] == '\0')
-			snprintf(server_status->err_msg, sizeof(server_status->err_msg), "unknown error");
-		if (server_status->error_code == 0)
-			server_status->error_code = 500;
+	void reset_err_info(struct server_error_info_t **err_info) {
+		memset(*err_info, 0, sizeof(**err_info));
+	}
 
-		log_error("Sending error message '%s' to socket %d", server_status->err_msg, server_status->error_socket);
+	struct server_error_info_t *error_info __attribute__((cleanup(reset_err_info))) = &server_status->error_info;
+	if (error_info->error_socket) {
+		if (error_info->err_msg[0] == '\0')
+			snprintf(error_info->err_msg, sizeof(error_info->err_msg), "unknown error");
+		if (error_info->error_code == 0)
+			error_info->error_code = 500;
 
-		smtp_send_error(server_status->error_socket, server_status->error_code, server_status->err_msg);
+		log_error("Sending error message '%s' to socket %d", error_info->err_msg, error_info->error_socket);
 
-		shutdown(server_status->error_socket, SHUT_WR);
-		FD_SET(server_status->error_socket, &server_status->error_fd_set);
+		smtp_send_error(error_info->error_socket, error_info->error_code, error_info->err_msg);
 
-		if (server_status->next_state)
-			return server_status->next_state;
+		shutdown(error_info->error_socket, SHUT_WR);
+		FD_SET(error_info->error_socket, &server_status->error_fd_set);
+
+		if (error_info->next_state)
+			return error_info->next_state;
 
 		return WAIT_CONN;
 	}
