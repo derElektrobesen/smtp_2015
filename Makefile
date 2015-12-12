@@ -2,7 +2,18 @@ CC ?=
 CFLAGS ?=
 LDFLAGS ?=
 
-EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99
+VERSION = '\"0.1\"'
+BUILD_YEAR = '\"$(shell date +"%Y")\"'
+
+PROJECT = '\"SMTP 2015\"'
+DEVELOPERS = '\"Pavel Berezhnoy <pberejnoy2005@gmail.com>\"'
+
+EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
+	-DVERSION=$(VERSION) \
+	-DBUILD_YEAR=$(BUILD_YEAR) \
+	-DDEVELOPERS=$(DEVELOPERS) \
+	-DPROJECT=$(PROJECT)
+
 EXTRA_LDFLASG ?= -flto -lconfig
 
 CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))

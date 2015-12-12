@@ -157,7 +157,6 @@ struct fds_process_status_t {
 
 struct server_error_info_t {
 	int error_socket;
-	int error_code;
 	char err_msg[512];
 	FSM_STATE_TYPE(server) next_state;
 };
@@ -251,12 +250,10 @@ FSM_CB(server, ERROR, server_status) {
 	if (error_info->error_socket) {
 		if (error_info->err_msg[0] == '\0')
 			snprintf(error_info->err_msg, sizeof(error_info->err_msg), "unknown error");
-		if (error_info->error_code == 0)
-			error_info->error_code = 500;
 
 		log_error("Sending error message '%s' to socket %d", error_info->err_msg, error_info->error_socket);
 
-		smtp_send_error(error_info->error_socket, error_info->error_code, error_info->err_msg);
+		smtp_reject_client(error_info->error_socket, error_info->err_msg);
 
 		shutdown(error_info->error_socket, SHUT_WR);
 		FD_SET(error_info->error_socket, &server_status->error_fd_set);

@@ -2,6 +2,7 @@
 #include "common.h"
 #include "config.h"
 #include "logger.h"
+#include "proto.h"
 
 #include <stdlib.h>
 #include <assert.h>
@@ -101,7 +102,7 @@ static int init_worker(struct worker_t *worker) {
 }
 
 static void run_worker(struct worker_t *worker) {
-
+	smtp_communicate_with_client(worker->sock);
 }
 
 static int destroy_worker_impl(struct worker_t *worker) {
