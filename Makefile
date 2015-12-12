@@ -21,6 +21,7 @@ EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
 	-DBUILD_YEAR=$(BUILD_YEAR) \
 	-DDEVELOPERS=$(DEVELOPERS) \
 	-DPROJECT=$(PROJECT) \
+	-DLOG_PATH
 
 EXTRA_LDFLASG ?= -flto -lconfig
 

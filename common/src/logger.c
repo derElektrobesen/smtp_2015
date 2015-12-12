@@ -10,6 +10,11 @@
 #include <sys/socket.h>
 #include <sys/select.h>
 
+#ifndef LOG_FILE_FLUSH_TIME
+// in seconds
+#	define LOG_FILE_FLUSH_TIME 1
+#endif
+
 #ifdef __MACH__ // fucking Machintosh
 #include <mach/clock.h>
 #include <mach/mach.h>
@@ -45,13 +50,12 @@ struct logger_connection_t {
 
 struct logger_status_t {
 	size_t sockets_count;
-	uint8_t inited;
 	struct logger_connection_t *conns;
 	FILE *log_f;
 
 	struct logger_connection_t *cur_conn;
 
-	char whoami[32];
+	char whoami[16];
 };
 
 static struct logger_status_t logger_status;
@@ -60,9 +64,19 @@ static void write_to_log_impl(FILE *f, const char *msg, int size) {
 	fprintf(f, "%.*s", size, msg);
 }
 
+static void set_whoami(char prefix) {
+	snprintf(logger_status.whoami, sizeof(logger_status.whoami), "%c-%d", prefix, getpid());
+}
+
 static void write_to_log(const struct logger_connection_t *conn, const char *msg, size_t size) {
-	char *whoami = logger_status.inited ? logger_status.whoami : "init";
-	FILE *f = logger_status.inited ? logger_status.log_f : stderr;
+	if (logger_status.whoami[0] == '\0')
+		set_whoami('I');
+
+	char *whoami = logger_status.whoami;
+	FILE *f = logger_status.log_f;
+
+	if (!f)
+		f = stderr;
 
 	struct timespec time;
 	clock_gettime_impl(&time);
@@ -74,12 +88,12 @@ static void write_to_log(const struct logger_connection_t *conn, const char *msg
 	size_t ret = strftime(time_str, sizeof(time_str), "%d.%m.%Y %H:%M:%S", &tm);
 	snprintf(time_str + ret, sizeof(time_str) - ret, ".%.06ld", time.tv_nsec / 1000);
 
-	const size_t whoami_size = 15; // 5 chars for pid, 2 chars for spaces and some extra space
+	const size_t whoami_size = 9; // 5 chars for pid, 2 chars for spaces and some extra space
 	size_t left = whoami_size - strlen(whoami);
 	size_t right = left - left / 2;
 	left -= right;
 
-	char spaces[20];
+	char spaces[10];
 	memset(spaces, ' ', sizeof(spaces));
 
 	char str[8192];
@@ -173,9 +187,8 @@ void deinitialize_logger() {
 	}
 }
 
-int init_socketpairs(int n_processes) {
-	if (logger_status.inited)
-		deinitialize_logger();
+int init_pipes(int n_processes) {
+	deinitialize_logger();
 
 	logger_status.sockets_count = (unsigned)n_processes + 1;
 
@@ -185,14 +198,14 @@ int init_socketpairs(int n_processes) {
 
 	memset(logger_status.conns, 0, n_bytes);
 
-	log_trace("Trying to init socketpairs");
+	log_trace("Trying to init pipes");
 
 	int i = 0;
 	for (; i < logger_status.sockets_count; ++i) {
 		// with master process
 		int sockets[2] = { 0, 0 };
 		if (pipe(sockets) < 0) {
-			log_error("Can't init socketpair: %s", strerror(errno));
+			log_error("Can't init pipe: %s", strerror(errno));
 			return -1;
 		}
 
@@ -228,8 +241,15 @@ static void close_remote_socks() {
 
 static void run_logger_loop() {
 	fd_set active;
+	struct timeval timeout = {
+		.tv_sec = LOG_FILE_FLUSH_TIME,
+		.tv_usec = 0,
+	};
 
-	//sleep(30);
+	struct timeval *timeout_ptr = NULL;
+	if (logger_status.log_f != stderr)
+		timeout_ptr = &timeout;
+
 	while (1) {
 		FD_ZERO(&active);
 
@@ -238,15 +258,19 @@ static void run_logger_loop() {
 			FD_SET(logger_status.conns[i].remote_sock, &active);
 		}
 
-		if (select(FD_SETSIZE, &active, NULL, NULL, NULL) < 0) {
+		int res = select(FD_SETSIZE, &active, NULL, NULL, timeout_ptr);
+		if (res < 0) {
 			log_info("Select failed: %s", strerror(errno));
 			continue;
+		} else if (res == 0) {
+			// timeout
+			timeout.tv_sec = LOG_FILE_FLUSH_TIME;
+			fflush(logger_status.log_f);
 		}
 
 		for (i = 0; i < logger_status.sockets_count; ++i) {
 			struct logger_connection_t *conn = logger_status.conns + i;
 			if (FD_ISSET(conn->remote_sock, &active)) {
-				log_trace("Action happens on %d", conn->remote_sock);
 				receive_msg(conn);
 			}
 		}
@@ -268,13 +292,13 @@ pid_t logger_pid() {
 int init_logger(int n_processes, const char *log_file, const char *user, const char *group) {
 	log_trace("Trying to init logger for a process");
 
-	if (init_socketpairs(n_processes) < 0)
+	if (init_pipes(n_processes) < 0)
 		return -1;
 
 	FILE *f = NULL;
 	if (log_file) {
-		log_trace("Trying to opn log file %s", log_file);
-		f = fopen(log_file, "w+");
+		log_trace("Trying to open log file %s", log_file);
+		f = fopen(log_file, "a+");
 		if (!f) {
 			log_error("Can't open log file: %s", strerror(errno));
 			return -1;
@@ -288,12 +312,10 @@ int init_logger(int n_processes, const char *log_file, const char *user, const c
 		return -1;
 	}
 
-	logger_status.inited = 1;
-
 	if (__logger_pid == 0) {
 		// child -> logger
 		logger_status.log_f = f;
-		snprintf(logger_status.whoami, sizeof(logger_status.whoami), "logger %d", getpid());
+		set_whoami('L');
 
 		close_logger_socks();
 		drop_privileges(user, group, NULL);
@@ -304,7 +326,7 @@ int init_logger(int n_processes, const char *log_file, const char *user, const c
 	}
 
 	connect_to_logger(n_processes);
-	snprintf(logger_status.whoami, sizeof(logger_status.whoami), "master %d", getpid());
+	set_whoami('M');
 
 	// master process
 	if (log_file)
@@ -324,6 +346,7 @@ int reinit_logger(int index) {
 
 	assert(index < logger_status.sockets_count);
 	connect_to_logger(index);
+	set_whoami('W');
 
 	int i = 0;
 	for (; i < logger_status.sockets_count; ++i) {

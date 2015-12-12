@@ -97,13 +97,13 @@ static int init_worker(struct worker_t *worker) {
 	log_info("New worker created, pid = %d", pid);
 	worker->pid = pid;
 
-	int except[] = { worker->sock, logger_sock() };
-	close_opened_descriptors(except, sizeof(except) / sizeof(*except));
-
 	if (reinit_logger(worker->index) != 0) {
 		log_error("Can't reinit logger in child");
 		return -1;
 	}
+
+	int except[] = { worker->sock, logger_sock() };
+	close_opened_descriptors(except, sizeof(except) / sizeof(*except));
 
 	return 0;
 }
