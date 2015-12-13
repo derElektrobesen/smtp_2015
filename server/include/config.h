@@ -11,6 +11,7 @@
 	_(root_dir, STR) \
 	_(queue_dir, STR) \
 	_(n_workers, INT) \
+	_(hostname, STR) \
 
 SET_CONFIG_SPEC(CONFIG_SPEC)
 

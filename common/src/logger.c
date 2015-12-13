@@ -161,7 +161,7 @@ void log_impl(int lvl, const char *fmt, ...) {
 	if (printed < 0)
 		log_error("vsnprintf failed");
 	else
-		write_to_log(logger_status.cur_conn, str, printed);
+		write_to_log(logger_status.cur_conn, str, (unsigned)printed);
 }
 
 static __attribute__((destructor))

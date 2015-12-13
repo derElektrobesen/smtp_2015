@@ -21,9 +21,10 @@ EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
 	-DBUILD_YEAR=$(BUILD_YEAR) \
 	-DDEVELOPERS=$(DEVELOPERS) \
 	-DPROJECT=$(PROJECT) \
+	-DMESSAGE_MAX_SIZE=$(shell echo '10*1024*1024' | bc)lu \
 	-DLOG_PATH
 
-EXTRA_LDFLASG ?= -flto -lconfig
+EXTRA_LDFLASG ?= -flto -lconfig -lc
 
 CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 

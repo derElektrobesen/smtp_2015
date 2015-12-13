@@ -1,6 +1,7 @@
 #include "proto.h"
 #include "logger.h"
 #include "fsm.h"
+#include "config.h"
 
 #include <stdio.h>
 #include <unistd.h>
@@ -9,6 +10,9 @@
 #include <errno.h>
 #include <sys/socket.h>
 #include <sys/select.h>
+#include <strings.h>
+#include <stdarg.h>
+#include <ctype.h>
 
 #if !defined(VERSION) || !defined(BUILD_YEAR) || !defined(DEVELOPERS) || !defined(PROJECT)
 #	error "Pass constants above via makefile"
@@ -18,16 +22,24 @@
 #	define BLOCK_SIZE 4096
 #endif
 
+#ifndef MESSAGE_MAX_SIZE
+#	define MESSAGE_MAX_SIZE (unsigned long)1025*1024
+#endif
+
 enum {
-	ST_OK = 220,
-	ST_SRV_ERR = 503,
-	ST_CLOSE_AFTER_CONNECT = 554,
+	ST_SERVICE_READY = 220,
+	ST_BYE = 221,
+	ST_MAILING_OK = 250,
+	ST_LOCAL_ERR = 451,
+	ST_SYNTAX_ERR = 500,
+	ST_INVALID_PARAMS = 501,
+	ST_INVALID_CMD = 503,
+	ST_TRANSACTION_FAILED = 554,
 };
 
 static void send_response_ex(int sock, const char *msg, size_t msg_size) {
 	log_trace("Sending to client %d: '%.*s'", sock, (int)msg_size, msg);
 	write(sock, msg, strlen(msg));
-	write(sock, STRSZ("\r\n"));
 }
 
 static int send_response(int sock, int status, const char *msg) {
@@ -42,7 +54,30 @@ static int send_response(int sock, int status, const char *msg) {
 	}
 
 	send_response_ex(sock, real_msg, (size_t)printed);
+	write(sock, STRSZ("\r\n"));
+
 	return 0;
+}
+
+static void send_response_f(int sock, int status, const char *fmt, ...) __attribute__((format(printf, 3, 4)));
+static void send_response_f(int sock, int status, const char *fmt, ...) {
+	char buf[4096];
+
+	va_list ap;
+	va_start(ap, fmt);
+	int ret = vsnprintf(buf, sizeof(buf), fmt, ap);
+	va_end(ap);
+
+	if (ret < 0) {
+		log_error("Can't printf: %s", strerror(errno));
+		send_response(sock, ST_LOCAL_ERR, "Local error in processing");
+		return;
+	}
+
+	if (ret > sizeof(buf))
+		log_error("Too small buf into send_response_f");
+
+	send_response(sock, status, buf);
 }
 
 struct client_error_t {
@@ -54,6 +89,11 @@ struct buffer_t {
 	size_t allocated;
 	size_t used;
 	char *buf;
+};
+
+struct cli_info_t {
+	char *cli_domain;
+	char *cli_msg;
 };
 
 static void init_buffer(struct buffer_t *buf) {
@@ -74,8 +114,13 @@ static void expand_buffer(struct buffer_t *buf) {
 	_(ARG, WAIT_DATA) \
 	_(ARG, READ_DATA) \
 	_(ARG, WAIT_COMMAND) \
+	_(ARG, COMMAND_CAME) \
+	_(ARG, HELO_CAME) \
+	_(ARG, EHLO_CAME) \
+	_(ARG, NEXT_CMD) \
+	_(ARG, SYNTAX_ERR) \
 	_(ARG, CLOSE_CLIENT) \
-	_(ARG, FREE_BUF) \
+	_(ARG, FREE_MEM) \
 	_(ARG, SHUTDOWN, FSM_LAST_STATE)
 
 struct client_t;
@@ -85,20 +130,32 @@ struct client_t {
 	int sock;
 
 	const char *delimiter;
+	unsigned short delimiter_size;
 
 	struct buffer_t buffer;
+	struct buffer_t cli_data;
 	struct client_error_t cli_error;
+	struct cli_info_t cli_info;
 
 	FSM_STATE_TYPE(smtp) next_state;
 };
 
 FSM_CB(smtp, WELCOME_CLIENT, cli) {
-	int status = ST_OK;
+	int status = ST_SERVICE_READY;
 	if (cli->cli_error.msg) {
-		status = ST_CLOSE_AFTER_CONNECT;
+		status = ST_TRANSACTION_FAILED;
 	}
 
-	send_response(cli->sock, status,  PROJECT ", v" VERSION ". Developed by " DEVELOPERS ", " BUILD_YEAR);
+	log_debug("Trying to welcome the client");
+
+	static char welcome_str[4096] = "";
+	if (welcome_str[0] == '\0') {
+		log_trace("Creating welcome string");
+		snprintf(welcome_str, sizeof(welcome_str), "%s, " PROJECT ", v" VERSION ". Developed by " DEVELOPERS ", " BUILD_YEAR ". Ready", get_opt_hostname());
+		log_info("Setting welcome string to '%s'", welcome_str);
+	}
+
+	send_response(cli->sock, status, welcome_str);
 	if (cli->cli_error.msg) {
 		send_response(cli->sock, cli->cli_error.status, cli->cli_error.msg);
 		return CLOSE_CLIENT;
@@ -108,7 +165,156 @@ FSM_CB(smtp, WELCOME_CLIENT, cli) {
 }
 
 FSM_CB(smtp, WAIT_COMMAND, cli) {
+	cli->next_state = COMMAND_CAME;
 	return WAIT_DATA;
+}
+
+struct expected_command_t {
+	const char *cmd;
+	size_t cmd_len;
+	FSM_STATE_TYPE(smtp) state;
+};
+
+static struct expected_command_t expected_commands[] = {
+	{ .cmd = "HELO", .state = HELO_CAME, },
+	{ .cmd = "EHLO", .state = EHLO_CAME, },
+	{ .cmd = "QUIT", .state = CLOSE_CLIENT, },
+};
+
+FSM_CB(smtp, COMMAND_CAME, cli) {
+	struct buffer_t *buf = &cli->cli_data;
+
+	int i = 0;
+	if (expected_commands[0].cmd_len == 0) {
+		// count commands lengths
+		for (i = 0; i < sizeof(expected_commands) / sizeof(*expected_commands); ++i) {
+			expected_commands[i].cmd_len = strlen(expected_commands[i].cmd);
+		}
+	}
+
+	if (buf->used < 1) {
+		log_debug("Empty command came");
+		return WAIT_COMMAND;
+	}
+
+	log_debug("Trying to parse came command: %.*s", (int)buf->used, buf->buf);
+	const char *delim = strnstr(buf->buf, " ", buf->used);
+	uint8_t space_found = 1;
+
+	if (!delim) {
+		log_debug("No space char found in cli request. Use full string");
+		delim = buf->buf + buf->used;
+		space_found = 0;
+	}
+
+	FSM_STATE_TYPE(smtp) next_state = NULL;
+
+	size_t cli_cmd_len = (size_t)(delim - buf->buf);
+	for (i = 0; !next_state && i < sizeof(expected_commands) / sizeof(*expected_commands); ++i) {
+		struct expected_command_t *cmd = expected_commands + i;
+		if ((cli_cmd_len == cmd->cmd_len) && (strncasecmp(cmd->cmd, buf->buf, cli_cmd_len) == 0)) {
+			log_debug("Command recognized as %.*s", (int)cli_cmd_len, cmd->cmd);
+			next_state = cmd->state;
+		}
+	}
+
+	if (!next_state) {
+		log_debug("Invalid command came: %.*s", (int)cli_cmd_len, buf->buf);
+		send_response(cli->sock, ST_SYNTAX_ERR, "Unknown command");
+		return NEXT_CMD;
+	}
+
+	buf->used -= cli_cmd_len + space_found; // next space should be removed
+	memmove(buf->buf, buf->buf + cli_cmd_len + space_found, buf->used);
+
+	return next_state;
+}
+
+FSM_CB(smtp, SYNTAX_ERR, cli) {
+	send_response(cli->sock, ST_SYNTAX_ERR, "Syntax error");
+	return NEXT_CMD;
+}
+
+static int set_client_domain(struct client_t *cli) {
+	struct buffer_t *buf = &cli->cli_data;
+	if (buf->used == 0) {
+		log_info("HELO command came without args");
+		return 1;
+	}
+
+	size_t size = buf->used;
+	const char *last_sym = buf->buf;
+	while (size > 0 && (*last_sym == '.' || isalnum(*last_sym))) {
+		++last_sym;
+		--size;
+	}
+
+	if (size != 0) {
+		log_info("Invalid number of args in request");
+		return 1;
+	}
+
+	if (cli->cli_info.cli_domain) {
+		log_info("Domain is already set");
+		send_response(cli->sock, ST_SYNTAX_ERR, "Unknown command");
+		return -1;
+	}
+
+	cli->cli_info.cli_domain = (char *)malloc(buf->used + 1);
+	snprintf(cli->cli_info.cli_domain, buf->used + 1, "%.*s", (int)buf->used, buf->buf);
+
+	log_info("Client domain was set to %s", cli->cli_info.cli_domain);
+
+	return 0;
+}
+
+FSM_CB(smtp, HELO_CAME, cli) {
+	log_debug("HELO command came");
+
+	int ret = set_client_domain(cli);
+	if (ret > 0)
+		return SYNTAX_ERR;
+	if (ret == 0)
+		send_response_f(cli->sock, ST_MAILING_OK, "%s ready to serve", get_opt_hostname());
+
+	return NEXT_CMD;
+}
+
+FSM_CB(smtp, EHLO_CAME, cli) {
+	log_debug("EHLO command came");
+
+#define add_to_resp(fmt, ...) ({ \
+	int _pr = snprintf(resp + printed, sizeof(resp) - printed, fmt "\r\n", ##__VA_ARGS__); \
+	if (_pr < 0 || (size_t)_pr > sizeof(resp) - printed) { \
+		log_error("Can't snprintf: %s", strerror(errno)); \
+		send_response(cli->sock, ST_LOCAL_ERR, "Local error in processing"); \
+		return NEXT_CMD; \
+	} \
+	printed += (unsigned)_pr; \
+})
+
+	int ret = set_client_domain(cli);
+	if (ret > 0)
+		return SYNTAX_ERR;
+	if (ret == 0) {
+		char resp[4096];
+		unsigned printed = 0;
+
+		add_to_resp("%d-%s ready to serve", ST_MAILING_OK, get_opt_hostname());
+		add_to_resp("%d-8BITMIME", ST_MAILING_OK);
+		add_to_resp("%d SIZE %lu", ST_MAILING_OK, MESSAGE_MAX_SIZE);
+
+		send_response_ex(cli->sock, resp, printed);
+	}
+
+#undef add_to_resp
+
+	return NEXT_CMD;
+}
+
+FSM_CB(smtp, NEXT_CMD, cli) {
+	cli->cli_data.used = 0;
+	return WAIT_COMMAND;
 }
 
 FSM_CB(smtp, WAIT_DATA, cli) {
@@ -124,13 +330,13 @@ FSM_CB(smtp, WAIT_DATA, cli) {
 	if (ret < 0) {
 		log_error("select failed: %s", strerror(errno));
 		close(cli->sock);
-		return FREE_BUF;
+		return FREE_MEM;
 	}
 
 	if (FD_ISSET(cli->sock, &err_set)) {
 		log_info("Client %d was gone. Close connection", cli->sock);
 		close(cli->sock);
-		return FREE_BUF;
+		return FREE_MEM;
 	}
 
 	if (FD_ISSET(cli->sock, &read_set)) {
@@ -143,14 +349,14 @@ FSM_CB(smtp, WAIT_DATA, cli) {
 
 FSM_CB(smtp, READ_DATA, cli) {
 	struct buffer_t *buf = &cli->buffer;
-	if (buf->allocated - buf->used < BLOCK_SIZE)
+	while (buf->allocated <= buf->used + BLOCK_SIZE)
 		expand_buffer(buf);
 
 	ssize_t received = read(cli->sock, buf->buf + buf->used, buf->allocated - buf->used);
 	if (received == 0) {
 		log_info("Client %d was gone. Close connection", cli->sock);
 		close(cli->sock);
-		return FREE_BUF;
+		return FREE_MEM;
 	}
 	if (received < 0) {
 		log_info("Error happen on read(): %s", strerror(errno));
@@ -159,35 +365,57 @@ FSM_CB(smtp, READ_DATA, cli) {
 		log_info("Can't process error happened. Close connection %d", cli->sock);
 
 		cli->cli_error.msg = "can't read";
-		cli->cli_error.status = ST_SRV_ERR;
+		cli->cli_error.status = ST_INVALID_CMD;
 		return CLOSE_CLIENT;
 	}
 
-	if (strstr(buf->buf, cli->delimiter)) {
+	buf->used += (size_t)received;
+
+	char *delimiter_ptr = (char *)memmem(buf->buf, buf->used, cli->delimiter, cli->delimiter_size);
+	if (delimiter_ptr) {
+		struct buffer_t *cli_buf = &cli->cli_data;
+		while (delimiter_ptr - buf->buf >= cli_buf->allocated)
+			expand_buffer(buf);
+
+		cli_buf->used = (size_t)(delimiter_ptr - buf->buf);
+		memcpy(cli_buf->buf, buf->buf, cli_buf->used);
+
+		buf->used -= cli_buf->used + cli->delimiter_size;
+		memmove(buf->buf, delimiter_ptr + cli->delimiter_size, buf->used);
+
 		if (cli->next_state)
 			return cli->next_state;
 
 		log_error("State not specified to process read data. Close connection %d", cli->sock);
 
 		cli->cli_error.msg = "server error";
-		cli->cli_error.status = ST_SRV_ERR;
+		cli->cli_error.status = ST_INVALID_CMD;
 		return CLOSE_CLIENT;
 	}
 
 	return WAIT_DATA;
 }
 
-FSM_CB(smtp, FREE_BUF, cli) {
+FSM_CB(smtp, FREE_MEM, cli) {
 	log_trace("Trying to free buffer");
 
 	if (cli->buffer.buf)
 		free(cli->buffer.buf);
 
+	if (cli->cli_data.buf)
+		free(cli->cli_data.buf);
+
+	if (cli->cli_info.cli_domain)
+		free(cli->cli_info.cli_domain);
+
+	if (cli->cli_info.cli_msg)
+		free(cli->cli_info.cli_msg);
+
 	return SHUTDOWN;
 }
 
 FSM_CB(smtp, CLOSE_CLIENT, cli) {
-	send_response_ex(cli->sock, STRSZ("QUIT"));
+	send_response(cli->sock, ST_BYE, "Bye");
 	shutdown(cli->sock, SHUT_WR);
 	return WAIT_DATA;
 }
@@ -197,7 +425,9 @@ static void init_cli(struct client_t *cli, int sock) {
 
 	cli->sock = sock;
 	cli->delimiter = "\r\n";
+	cli->delimiter_size = 2;
 	init_buffer(&cli->buffer);
+	init_buffer(&cli->cli_data);
 }
 
 void smtp_reject_client(int sock, const char *msg) {
@@ -207,11 +437,16 @@ void smtp_reject_client(int sock, const char *msg) {
 	cli.cli_error.status = 504;
 	cli.cli_error.msg = msg;
 
+	log_info("Rejecting client");
+
 	FSM_RUN(smtp, &cli);
 }
 
 void smtp_communicate_with_client(int sock) {
 	struct client_t cli;
 	init_cli(&cli, sock);
+
+	log_info("Starting communication with client");
+
 	FSM_RUN(smtp, &cli);
 }
