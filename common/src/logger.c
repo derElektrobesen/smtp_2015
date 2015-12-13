@@ -98,13 +98,14 @@ static void write_to_log(const struct logger_connection_t *conn, const char *msg
 
 	char str[8192];
 	int printed = snprintf(str, sizeof(str), "%s [%.*s%s%.*s] %.*s\n", time_str, (int)left, spaces, whoami, (int)right, spaces, (int)size, msg);
+	if (printed < 0) {
+		log_error("Can't snprintf");
+		return;
+	}
 
-	if (conn) {
-		if (printed > 0)
-			write(conn->logger_sock, str, (size_t)printed);
-		else
-			log_error("Can't snprintf");
-	} else
+	if (conn)
+		write(conn->logger_sock, str, (size_t)printed);
+	else
 		write_to_log_impl(f, str, printed); // logger process
 }
 
@@ -154,10 +155,10 @@ void log_impl(int lvl, const char *fmt, ...) {
 
 	va_list ap;
 	va_start(ap, fmt);
-	unsigned printed = (unsigned)vsnprintf(str, sizeof(str), fmt, ap);
+	int printed = vsnprintf(str, sizeof(str), fmt, ap);
 	va_end(ap);
 
-	if (printed >= sizeof(str))
+	if (printed < 0)
 		log_error("vsnprintf failed");
 	else
 		write_to_log(logger_status.cur_conn, str, printed);
@@ -188,9 +189,13 @@ void deinitialize_logger() {
 }
 
 int init_pipes(int n_processes) {
-	deinitialize_logger();
+	if (n_processes <= 0) {
+		log_error("Invalid number of processes");
+		return -1;
+	}
 
-	logger_status.sockets_count = (unsigned)n_processes + 1;
+	deinitialize_logger();
+	logger_status.sockets_count = (unsigned)n_processes + 1; // +1 for a master process
 
 	size_t n_bytes = sizeof(struct logger_connection_t) * logger_status.sockets_count;
 	logger_status.conns = (struct logger_connection_t *)malloc(n_bytes);
