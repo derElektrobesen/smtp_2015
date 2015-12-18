@@ -13,7 +13,7 @@ DEBUG ?= 0
 ifeq ($(DEBUG), 0)
 	CFLAGS += -O3 -flto
 else
-	CFLAGS += -O0 -ggdb3 -DDEBUG
+	CFLAGS += -O0 -ggdb3 -DDEBUG -DLOG_STATES -DLOG_PATH
 endif
 
 EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
@@ -22,7 +22,6 @@ EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
 	-DDEVELOPERS=$(DEVELOPERS) \
 	-DPROJECT=$(PROJECT) \
 	-DMESSAGE_MAX_SIZE=$(shell echo '10*1024*1024' | bc)lu \
-	-DLOG_PATH
 
 EXTRA_LDFLASG ?= -flto -lconfig -lc -lpcre
 

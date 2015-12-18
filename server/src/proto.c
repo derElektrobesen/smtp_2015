@@ -34,6 +34,7 @@ enum {
 	ST_BYE = 221,
 	ST_MAILING_OK = 250,
 	ST_LOCAL_ERR = 451,
+	ST_IN_TRANSACTION = 421,
 	ST_SYNTAX_ERR = 500,
 	ST_INVALID_PARAMS = 501,
 	ST_INVALID_CMD = 503,
@@ -115,7 +116,8 @@ static void expand_buffer(struct buffer_t *buf) {
 }
 
 #define STATES(ARG, _) \
-	_(ARG, WELCOME_CLIENT, FSM_INIT_STATE) \
+	_(ARG, INIT, FSM_INIT_STATE) \
+	_(ARG, WELCOME_CLIENT) \
 	_(ARG, WAIT_DATA) \
 	_(ARG, READ_DATA) \
 	_(ARG, WAIT_COMMAND) \
@@ -123,6 +125,10 @@ static void expand_buffer(struct buffer_t *buf) {
 	_(ARG, HELO_CAME) \
 	_(ARG, EHLO_CAME) \
 	_(ARG, MAIL_CAME) \
+	_(ARG, RCPT_CAME) \
+	_(ARG, DATA_CAME) \
+	_(ARG, RSET_CAME) \
+	_(ARG, RSET_CAME_AFTER) \
 	_(ARG, NEXT_CMD) \
 	_(ARG, SYNTAX_ERR) \
 	_(ARG, SERVER_ERROR) \
@@ -134,6 +140,7 @@ static void expand_buffer(struct buffer_t *buf) {
 struct client_t;
 FSM(smtp, STATES, struct client_t *);
 
+struct transaction_t;
 struct client_t {
 	int sock;
 
@@ -144,6 +151,9 @@ struct client_t {
 	struct buffer_t cli_data;
 	struct client_error_t cli_error;
 	struct cli_info_t cli_info;
+
+	const struct transaction_t *cur_transaction;
+	const struct command_t *cur_command;
 
 	FSM_STATE_TYPE(smtp) next_state;
 };
@@ -183,29 +193,58 @@ FSM_CB(smtp, WAIT_COMMAND, cli) {
 	return WAIT_DATA;
 }
 
-struct expected_command_t {
-	const char *cmd;
+struct command_t {
+	const char cmd[64];
 	size_t cmd_len;
 	FSM_STATE_TYPE(smtp) state;
 };
 
-static struct expected_command_t expected_commands[] = {
-	{ .cmd = "HELO", .state = HELO_CAME, },
-	{ .cmd = "EHLO", .state = EHLO_CAME, },
-	{ .cmd = "MAIL", .state = MAIL_CAME, },
-	{ .cmd = "QUIT", .state = CLOSE_CLIENT, },
+enum {
+	FL_ABORT_ACTIONS = 1,
 };
+
+struct transaction_t {
+	struct command_t commands[64]; // MAX COMMANDS
+	size_t commands_count;
+	struct command_t *cur_command;
+
+	uint32_t flags;
+};
+
+#define CMDL(name) .cmd = name, .cmd_len = sizeof(name) - 1
+
+static const struct transaction_t transactions[] = {
+	{
+		.commands = {
+			{ CMDL("QUIT"), .state = CLOSE_CLIENT, },
+			{ CMDL("RSET"), .state = RSET_CAME, },
+		},
+		.commands_count = 2,
+		.flags = FL_ABORT_ACTIONS,
+	}, {
+		.commands = {
+			{ CMDL("HELO"), .state = HELO_CAME, },
+		},
+		.commands_count = 1,
+	}, {
+		.commands = {
+			{ CMDL("EHLO"), .state = EHLO_CAME, },
+		},
+		.commands_count = 1,
+	}, {
+		.commands = {
+			{ CMDL("MAIL"), .state = MAIL_CAME, },
+			{ CMDL("RCPT"), .state = RCPT_CAME, },
+			{ CMDL("DATA"), .state = DATA_CAME, },
+		},
+		.commands_count = 3,
+	},
+};
+
+#undef CMDL
 
 FSM_CB(smtp, COMMAND_CAME, cli) {
 	struct buffer_t *buf = &cli->cli_data;
-
-	int i = 0;
-	if (expected_commands[0].cmd_len == 0) {
-		// count commands lengths
-		for (i = 0; i < sizeof(expected_commands) / sizeof(*expected_commands); ++i) {
-			expected_commands[i].cmd_len = strlen(expected_commands[i].cmd);
-		}
-	}
 
 	if (buf->used < 1) {
 		log_debug("Empty command came");
@@ -222,25 +261,60 @@ FSM_CB(smtp, COMMAND_CAME, cli) {
 		space_found = 0;
 	}
 
-	FSM_STATE_TYPE(smtp) next_state = NULL;
+	const struct transaction_t *transaction = NULL;
+	const struct command_t *command = NULL;
 
+	int i = 0;
 	size_t cli_cmd_len = (size_t)(delim - buf->buf);
-	for (i = 0; !next_state && i < sizeof(expected_commands) / sizeof(*expected_commands); ++i) {
-		struct expected_command_t *cmd = expected_commands + i;
-		if ((cli_cmd_len == cmd->cmd_len) && (strncasecmp(cmd->cmd, buf->buf, cli_cmd_len) == 0)) {
-			log_debug("Command recognized as %.*s", (int)cli_cmd_len, cmd->cmd);
-			next_state = cmd->state;
+	for (; !transaction && i < VSIZE(transactions); ++i) {
+		int j = 0;
+		const struct transaction_t *cur_transaction = transactions + i;
+		for (; !command && j < cur_transaction->commands_count; ++j) {
+			const struct command_t *cmd = cur_transaction->commands + j;
+			if (cli_cmd_len == cmd->cmd_len && (strncasecmp(cmd->cmd, buf->buf, cli_cmd_len) == 0)) {
+				log_trace("Command recognized as %.*s", (int)cli_cmd_len, cmd->cmd);
+				command = cmd;
+				transaction = cur_transaction;
+			}
 		}
 	}
 
-	if (!next_state) {
+	if (!transaction || !command) {
 		log_debug("Invalid command came: %.*s", (int)cli_cmd_len, buf->buf);
 		send_response(cli->sock, ST_SYNTAX_ERR, "Unknown command");
 		return NEXT_CMD;
 	}
 
+	if (cli->cur_transaction && cli->cur_command == &cli->cur_transaction->commands[cli->cur_transaction->commands_count - 1]) {
+		log_trace("Transaction ended");
+		cli->cur_transaction = NULL;
+		cli->cur_command = NULL;
+	}
+
+	if (transaction->flags & FL_ABORT_ACTIONS) {
+		log_debug("Abort action came");
+		return command->state;
+	}
+
+	// cur transaction and cur command should be both set or not set
+	assert(!cli->cur_transaction == !cli->cur_command);
+
+	if (((cli->cur_transaction && cli->cur_command)
+			&& (transaction != cli->cur_transaction || command <= cli->cur_command || command != cli->cur_command + 1))
+		|| (!cli->cur_transaction && command != &transaction->commands[0])
+	) {
+		send_response(cli->sock, ST_IN_TRANSACTION, "Command out of sequence; try again later");
+		return NEXT_CMD;
+	}
+
+	cli->cur_transaction = transaction;
+	cli->cur_command = command;
+
 	buf->used -= cli_cmd_len + space_found; // next space should be removed
 	memmove(buf->buf, buf->buf + cli_cmd_len + space_found, buf->used);
+
+	FSM_STATE_TYPE(smtp) next_state = command->state;
+	assert(next_state);
 
 	return next_state;
 }
@@ -343,6 +417,14 @@ FSM_CB(smtp, MAIL_CAME, cli) {
 	return NEXT_CMD;
 }
 
+FSM_CB(smtp, RCPT_CAME, cli) {
+	return NEXT_CMD;
+}
+
+FSM_CB(smtp, DATA_CAME, cli) {
+	return NEXT_CMD;
+}
+
 FSM_CB(smtp, SERVER_ERROR, cli) {
 	cli->cli_error.status = ST_LOCAL_ERR;
 	cli->cli_error.msg = "Local error in processuing";
@@ -378,6 +460,18 @@ FSM_CB(smtp, EHLO_CAME, cli) {
 #undef add_to_resp
 
 	return NEXT_CMD;
+}
+
+FSM_CB(smtp, RSET_CAME_AFTER, cli) {
+	cli->next_state = NEXT_CMD;
+	send_response(cli->sock, ST_MAILING_OK, "Ok");
+
+	return INIT;
+}
+
+FSM_CB(smtp, RSET_CAME, cli) {
+	cli->next_state = RSET_CAME_AFTER;
+	return FREE_MEM;
 }
 
 FSM_CB(smtp, NEXT_CMD, cli) {
@@ -420,6 +514,9 @@ FSM_CB(smtp, READ_DATA, cli) {
 	while (buf->allocated <= buf->used + BLOCK_SIZE)
 		expand_buffer(buf);
 
+	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
+	cli->next_state = NULL;
+
 	ssize_t received = read(cli->sock, buf->buf + buf->used, buf->allocated - buf->used);
 	if (received == 0) {
 		log_info("Client %d was gone. Close connection", cli->sock);
@@ -451,16 +548,9 @@ FSM_CB(smtp, READ_DATA, cli) {
 		buf->used -= cli_buf->used + cli->delimiter_size;
 		memmove(buf->buf, delimiter_ptr + cli->delimiter_size, buf->used);
 
-		FSM_STATE_TYPE(smtp) next_state = cli->next_state;
-		cli->next_state = NULL;
-		if (next_state)
-			return next_state;
+		assert(next_state);
 
-		log_error("State not specified to process read data. Close connection %d", cli->sock);
-
-		cli->cli_error.msg = "server error";
-		cli->cli_error.status = ST_INVALID_CMD;
-		return SHOW_ERROR_AND_CLOSE;
+		return next_state;
 	}
 
 	return WAIT_DATA;
@@ -476,6 +566,11 @@ FSM_CB(smtp, FREE_MEM, cli) {
 	safe_free(cli->cli_info.cli_to);
 	safe_free(cli->cli_info.cli_data);
 
+	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
+	cli->next_state = NULL;
+	if (next_state)
+		return next_state;
+
 	return SHUTDOWN;
 }
 
@@ -485,14 +580,27 @@ FSM_CB(smtp, CLOSE_CLIENT, cli) {
 	return WAIT_DATA;
 }
 
-static void init_cli(struct client_t *cli, int sock) {
-	memset(cli, 0, sizeof(*cli));
-
-	cli->sock = sock;
+FSM_CB(smtp, INIT, cli) {
 	cli->delimiter = "\r\n";
 	cli->delimiter_size = 2;
 	init_buffer(&cli->buffer);
 	init_buffer(&cli->cli_data);
+
+	cli->cur_transaction = NULL;
+	cli->cur_command = NULL;
+
+	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
+	cli->next_state = NULL;
+	if (next_state)
+		return next_state;
+
+	return WELCOME_CLIENT;
+}
+
+static void init_cli(struct client_t *cli, int sock) {
+	memset(cli, 0, sizeof(*cli));
+
+	cli->sock = sock;
 }
 
 void smtp_reject_client(int sock, const char *msg) {

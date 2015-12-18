@@ -16,6 +16,7 @@
 #define safe_free(ptr) ({ \
 	if (ptr) \
 		free(ptr); \
+		ptr = NULL; \
 	})
 
 #define STRSZ(str) (str), (sizeof(str) - 1)

@@ -81,8 +81,22 @@
 #define __FSM_PREDECLARE_FUNCTION_IMPL(name, state, ...) \
 	FSM_CB(name, state, arg);
 
+#ifdef LOG_STATES
+#	define __FSM_DECL_ST_NAME(state) .state_name = #state,
+#	define __FSM_DECL_ST_NAME_FIELD const char *state_name;
+#	define __FSM_GET_STATE(name, some_call) ({ \
+		const __FSM_LOCAL_STATE_TYPE(name) st = (some_call); \
+		log_trace("FSM " # name ": next state is %s", st.state_name); \
+		st.st; \
+	})
+#else // LOG_STATES
+#	define __FSM_DECL_ST_NAME(state)
+#	define __FSM_DECL_ST_NAME_FIELD
+#	define __FSM_GET_STATE(name, some_call) ({ some_call.st; })
+#endif // LOG_STATES
+
 #define __FSM_DECLARE_SINGLE_STATE(name, state, ...) \
-	inline static __FSM_LOCAL_STATE_TYPE(name) state() { return (__FSM_LOCAL_STATE_TYPE(name)){ .st = __FSM_STATE(name, state), }; }
+	inline static __FSM_LOCAL_STATE_TYPE(name) state() { return (__FSM_LOCAL_STATE_TYPE(name)){ .st = __FSM_STATE(name, state), __FSM_DECL_ST_NAME(state) }; }
 
 #define __FSM_PREDECLARE_FUNCTIONS(name, STATES_LIST) \
 	STATES_LIST(name, __FSM_PREDECLARE_FUNCTION_IMPL) \
@@ -106,7 +120,7 @@
 
 #define FSM(name, STATES_LIST, userdata_t) \
 	__FSM_DECLARE_STATES_LIST(name, STATES_LIST) \
-	__FSM_LOCAL_STATE_TYPE(name) { __FSM_STATE_TYPE_LOCAL(name) st; }; \
+	__FSM_LOCAL_STATE_TYPE(name) { __FSM_STATE_TYPE_LOCAL(name) st; __FSM_DECL_ST_NAME_FIELD }; \
 	typedef __FSM_LOCAL_STATE_TYPE(name) (*FSM_STATE_TYPE(name))(); \
 	typedef FSM_STATE_TYPE(name) (*__FSM_CB_TYPE(name))(userdata_t user_data); \
 	typedef userdata_t __FSM_USERDATA_T_NAME(name); \
@@ -119,7 +133,7 @@
 	__FSM_STATE_TYPE_LOCAL(name) last_state = FSM_LAST_STATE(name)().st; \
 	while (current_state != last_state) { \
 		assert(current_state > __FSM_FIRST_STATE(name) && current_state < __FSM_MAX_ID(name)); \
-		current_state = __FSM_STATES_LIST(name)[current_state](userdata)().st; \
+		current_state = __FSM_GET_STATE(name, __FSM_STATES_LIST(name)[current_state](userdata)()); \
 	} \
 })
 
