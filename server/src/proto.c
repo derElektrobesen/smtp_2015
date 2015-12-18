@@ -13,6 +13,7 @@
 #include <strings.h>
 #include <stdarg.h>
 #include <ctype.h>
+#include <pcre.h>
 
 #if !defined(VERSION) || !defined(BUILD_YEAR) || !defined(DEVELOPERS) || !defined(PROJECT)
 #	error "Pass constants above via makefile"
@@ -93,7 +94,9 @@ struct buffer_t {
 
 struct cli_info_t {
 	char *cli_domain;
-	char *cli_msg;
+	char *cli_from;
+	char *cli_to;
+	char *cli_data;
 };
 
 static void init_buffer(struct buffer_t *buf) {
@@ -117,8 +120,11 @@ static void expand_buffer(struct buffer_t *buf) {
 	_(ARG, COMMAND_CAME) \
 	_(ARG, HELO_CAME) \
 	_(ARG, EHLO_CAME) \
+	_(ARG, MAIL_CAME) \
 	_(ARG, NEXT_CMD) \
 	_(ARG, SYNTAX_ERR) \
+	_(ARG, SERVER_ERROR) \
+	_(ARG, SHOW_ERROR_AND_CLOSE) \
 	_(ARG, CLOSE_CLIENT) \
 	_(ARG, FREE_MEM) \
 	_(ARG, SHUTDOWN, FSM_LAST_STATE)
@@ -148,7 +154,7 @@ FSM_CB(smtp, WELCOME_CLIENT, cli) {
 
 	log_debug("Trying to welcome the client");
 
-	static char welcome_str[4096] = "";
+	char welcome_str[4096] = "";
 	if (welcome_str[0] == '\0') {
 		log_trace("Creating welcome string");
 		snprintf(welcome_str, sizeof(welcome_str), "%s, " PROJECT ", v" VERSION ". Developed by " DEVELOPERS ", " BUILD_YEAR ". Ready", get_opt_hostname());
@@ -156,12 +162,18 @@ FSM_CB(smtp, WELCOME_CLIENT, cli) {
 	}
 
 	send_response(cli->sock, status, welcome_str);
-	if (cli->cli_error.msg) {
-		send_response(cli->sock, cli->cli_error.status, cli->cli_error.msg);
-		return CLOSE_CLIENT;
-	}
+	if (cli->cli_error.msg)
+		return SHOW_ERROR_AND_CLOSE;
 
 	return WAIT_COMMAND;
+}
+
+FSM_CB(smtp, SHOW_ERROR_AND_CLOSE, cli) {
+	if (!cli->cli_error.msg)
+		return NEXT_CMD;
+
+	send_response(cli->sock, cli->cli_error.status, cli->cli_error.msg);
+	return CLOSE_CLIENT;
 }
 
 FSM_CB(smtp, WAIT_COMMAND, cli) {
@@ -178,6 +190,7 @@ struct expected_command_t {
 static struct expected_command_t expected_commands[] = {
 	{ .cmd = "HELO", .state = HELO_CAME, },
 	{ .cmd = "EHLO", .state = EHLO_CAME, },
+	{ .cmd = "MAIL", .state = MAIL_CAME, },
 	{ .cmd = "QUIT", .state = CLOSE_CLIENT, },
 };
 
@@ -280,6 +293,60 @@ FSM_CB(smtp, HELO_CAME, cli) {
 	return NEXT_CMD;
 }
 
+FSM_CB(smtp, MAIL_CAME, cli) {
+	log_debug("MAIL command came");
+
+	struct buffer_t *buf = &cli->cli_data;
+	if (buf->used == 0) {
+		log_info("MAIL command came without args");
+		return SYNTAX_ERR;
+	}
+
+	const char *err;
+	int err_off;
+
+	void _pcre_free(pcre **re) {
+		if (re && *re)
+			pcre_free(*re);
+	}
+
+	pcre *re __attribute__((cleanup(_pcre_free))) =
+		pcre_compile("^from: ?<([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+[.][a-zA-Z0-9-.]+)>$", PCRE_CASELESS, &err, &err_off, NULL);
+
+	if (!re) {
+		log_error("pcre_compile failed (offset: %d), %s", err_off, err);
+		return SERVER_ERROR;
+	}
+
+	int ovec[3];
+	int ovecsize = VSIZE(ovec);
+
+	int rc = pcre_exec(re, 0, buf->buf, (int)buf->used, 0, 0, ovec, ovecsize);
+	if (!rc) {
+		log_info("Invalid MAIL command came, data == '%.*s'", (int)buf->used, buf->buf);
+		return SYNTAX_ERR;
+	}
+
+	if (ovec[1] - ovec[0] < 0) {
+		log_error("invalid data from pcre: %d-%d", ovec[1], ovec[0]);
+		return SERVER_ERROR;
+	}
+
+	cli->cli_info.cli_from = malloc((size_t)(ovec[1] - ovec[0] + 1));
+	snprintf(cli->cli_info.cli_from, (size_t)(ovec[1] - ovec[0] + 1), "%.*s", ovec[1] - ovec[0], buf->buf + ovec[1]);
+
+	log_debug("Trying to send message from '%s'", cli->cli_info.cli_from);
+	send_response_f(cli->sock, ST_MAILING_OK, "Sender <%s> Ok", cli->cli_info.cli_from);
+
+	return NEXT_CMD;
+}
+
+FSM_CB(smtp, SERVER_ERROR, cli) {
+	cli->cli_error.status = ST_LOCAL_ERR;
+	cli->cli_error.msg = "Local error in processuing";
+	return SHOW_ERROR_AND_CLOSE;
+}
+
 FSM_CB(smtp, EHLO_CAME, cli) {
 	log_debug("EHLO command came");
 
@@ -287,8 +354,7 @@ FSM_CB(smtp, EHLO_CAME, cli) {
 	int _pr = snprintf(resp + printed, sizeof(resp) - printed, fmt "\r\n", ##__VA_ARGS__); \
 	if (_pr < 0 || (size_t)_pr > sizeof(resp) - printed) { \
 		log_error("Can't snprintf: %s", strerror(errno)); \
-		send_response(cli->sock, ST_LOCAL_ERR, "Local error in processing"); \
-		return NEXT_CMD; \
+		return SERVER_ERROR; \
 	} \
 	printed += (unsigned)_pr; \
 })
@@ -366,7 +432,7 @@ FSM_CB(smtp, READ_DATA, cli) {
 
 		cli->cli_error.msg = "can't read";
 		cli->cli_error.status = ST_INVALID_CMD;
-		return CLOSE_CLIENT;
+		return SHOW_ERROR_AND_CLOSE;
 	}
 
 	buf->used += (size_t)received;
@@ -383,14 +449,16 @@ FSM_CB(smtp, READ_DATA, cli) {
 		buf->used -= cli_buf->used + cli->delimiter_size;
 		memmove(buf->buf, delimiter_ptr + cli->delimiter_size, buf->used);
 
-		if (cli->next_state)
-			return cli->next_state;
+		FSM_STATE_TYPE(smtp) next_state = cli->next_state;
+		cli->next_state = NULL;
+		if (next_state)
+			return next_state;
 
 		log_error("State not specified to process read data. Close connection %d", cli->sock);
 
 		cli->cli_error.msg = "server error";
 		cli->cli_error.status = ST_INVALID_CMD;
-		return CLOSE_CLIENT;
+		return SHOW_ERROR_AND_CLOSE;
 	}
 
 	return WAIT_DATA;
@@ -399,17 +467,12 @@ FSM_CB(smtp, READ_DATA, cli) {
 FSM_CB(smtp, FREE_MEM, cli) {
 	log_trace("Trying to free buffer");
 
-	if (cli->buffer.buf)
-		free(cli->buffer.buf);
-
-	if (cli->cli_data.buf)
-		free(cli->cli_data.buf);
-
-	if (cli->cli_info.cli_domain)
-		free(cli->cli_info.cli_domain);
-
-	if (cli->cli_info.cli_msg)
-		free(cli->cli_info.cli_msg);
+	safe_free(cli->buffer.buf);
+	safe_free(cli->cli_data.buf);
+	safe_free(cli->cli_info.cli_domain);
+	safe_free(cli->cli_info.cli_from);
+	safe_free(cli->cli_info.cli_to);
+	safe_free(cli->cli_info.cli_data);
 
 	return SHUTDOWN;
 }

@@ -13,6 +13,11 @@
 #define VSIZE(name) sizeof(name) / sizeof(*name)
 #define V_VSIZE(name) name, VSIZE(name)
 
+#define safe_free(ptr) ({ \
+	if (ptr) \
+		free(ptr); \
+	})
+
 #define STRSZ(str) (str), (sizeof(str) - 1)
 
 int drop_privileges(const char *user, const char *group, const char *dir);

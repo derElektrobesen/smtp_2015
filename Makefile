@@ -24,7 +24,7 @@ EXTRA_FLAGS ?= -Wall -Werror -Wconversion -std=c99 \
 	-DMESSAGE_MAX_SIZE=$(shell echo '10*1024*1024' | bc)lu \
 	-DLOG_PATH
 
-EXTRA_LDFLASG ?= -flto -lconfig -lc
+EXTRA_LDFLASG ?= -flto -lconfig -lc -lpcre
 
 CURRENT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 
