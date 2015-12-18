@@ -20,14 +20,15 @@
 #endif
 
 #ifndef BLOCK_SIZE
-#	define BLOCK_SIZE 4096
+#	define BLOCK_SIZE 512
 #endif
 
 #ifndef MESSAGE_MAX_SIZE
 #	define MESSAGE_MAX_SIZE (unsigned long)1025*1024
 #endif
 
-#define EMAIL_RE "[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+"
+#define EMAIL_RE "(?:(?:@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+,?)*:)?([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+)"
+#define RCPT_DELIM ";"
 
 enum {
 	ST_SERVICE_READY = 220,
@@ -38,6 +39,7 @@ enum {
 	ST_SYNTAX_ERR = 500,
 	ST_INVALID_PARAMS = 501,
 	ST_INVALID_CMD = 503,
+	ST_NO_SUCH_USER = 550,
 	ST_TRANSACTION_FAILED = 554,
 };
 
@@ -98,8 +100,9 @@ struct buffer_t {
 struct cli_info_t {
 	char *cli_domain;
 	char *cli_from;
-	char *cli_to;
 	char *cli_data;
+
+	struct buffer_t cli_recipients; // ; is delimiter
 };
 
 static void init_buffer(struct buffer_t *buf) {
@@ -155,6 +158,8 @@ struct client_t {
 	const struct transaction_t *cur_transaction;
 	const struct command_t *cur_command;
 
+	int32_t transaction_flags;
+
 	FSM_STATE_TYPE(smtp) next_state;
 };
 
@@ -201,6 +206,8 @@ struct command_t {
 
 enum {
 	FL_ABORT_ACTIONS = 1,
+	FL_SHOULD_RETRY = 2,
+	FL_CAN_RETRY = 4,
 };
 
 struct transaction_t {
@@ -299,10 +306,15 @@ FSM_CB(smtp, COMMAND_CAME, cli) {
 	// cur transaction and cur command should be both set or not set
 	assert(!cli->cur_transaction == !cli->cur_command);
 
-	if (((cli->cur_transaction && cli->cur_command)
-			&& (transaction != cli->cur_transaction || command <= cli->cur_command || command != cli->cur_command + 1))
-		|| (!cli->cur_transaction && command != &transaction->commands[0])
-	) {
+	int32_t flags = cli->transaction_flags;
+	cli->transaction_flags = 0;
+
+	if ((flags & FL_CAN_RETRY) != 0 && command == cli->cur_command)
+		log_debug("Retry last command");
+	else if (((flags & FL_SHOULD_RETRY) != 0 && command != cli->cur_command)
+		|| ((flags & FL_SHOULD_RETRY) == 0
+			&& ((cli->cur_transaction && (transaction != cli->cur_transaction || command <= cli->cur_command || command != cli->cur_command + 1))
+			|| (!cli->cur_transaction && command != &transaction->commands[0])))) {
 		send_response(cli->sock, ST_IN_TRANSACTION, "Command out of sequence; try again later");
 		return NEXT_CMD;
 	}
@@ -369,8 +381,47 @@ FSM_CB(smtp, HELO_CAME, cli) {
 	return NEXT_CMD;
 }
 
+static pcre *from_re = NULL;
+static pcre *rcpt_re = NULL;
+
+__attribute__((destructor))
+static void pcre_cleanup() {
+	if (from_re)
+		pcre_free(from_re);
+	if (rcpt_re)
+		pcre_free(rcpt_re);
+}
+
+static char *exec_email_re(pcre *re, const char *data, size_t data_len, int *len) {
+	int ovec[24];
+	int ovecsize = VSIZE(ovec);
+
+	int rc = pcre_exec(re, 0, data, (int)data_len, 0, 0, ovec, ovecsize);
+
+	int off = ovec[2];
+	*len = ovec[3] - ovec[2];
+	if (rc < 0) {
+		log_info("Invalid command came, data == '%.*s'", (int)data_len, data);
+		*len = -1;
+		return NULL;
+	}
+
+	if (*len == 0) {
+		log_info("Empty addr found cmd");
+		return "";
+	}
+
+	char *ret = malloc((size_t)*len + 1);
+	snprintf(ret, (size_t)*len + 1, "%.*s", *len, data + off);
+
+	log_debug("Email was recognized as '%s'", ret);
+	return ret;
+}
+
 FSM_CB(smtp, MAIL_CAME, cli) {
 	log_debug("MAIL command came");
+
+	cli->transaction_flags |= FL_SHOULD_RETRY;
 
 	struct buffer_t *buf = &cli->cli_data;
 	if (buf->used == 0) {
@@ -378,50 +429,104 @@ FSM_CB(smtp, MAIL_CAME, cli) {
 		return SYNTAX_ERR;
 	}
 
-	const char *err;
-	int err_off;
-
-	void _pcre_free(pcre **re) {
-		if (re && *re)
-			pcre_free(*re);
-	}
-
 	log_trace("MAIL request: '%.*s'", (int)buf->used, buf->buf);
 
-	pcre *re __attribute__((cleanup(_pcre_free))) =
-		pcre_compile("^from: ?<(" EMAIL_RE ")>$", PCRE_CASELESS, &err, &err_off, NULL);
+	if (!from_re) {
+		const char *err;
+		int err_off;
 
-	if (!re) {
-		log_error("pcre_compile failed (offset: %d), %s", err_off, err);
-		return SERVER_ERROR;
+		from_re = pcre_compile("^from: ?<" EMAIL_RE "?>$", PCRE_CASELESS, &err, &err_off, NULL);
+
+		if (!from_re) {
+			log_error("pcre_compile failed (offset: %d), %s", err_off, err);
+			return SERVER_ERROR;
+		}
 	}
 
-	int ovec[24];
-	int ovecsize = VSIZE(ovec);
-
-	int rc = pcre_exec(re, 0, buf->buf, (int)buf->used, 0, 0, ovec, ovecsize);
-
-	int off = ovec[2];
-	int len = ovec[3] - ovec[2];
-	if (rc < 0 || len <= 0) {
-		log_info("Invalid MAIL command came, data == '%.*s'", (int)buf->used, buf->buf);
+	int len = 0;
+	char *ret = exec_email_re(from_re, buf->buf, buf->used, &len);
+	if (len < 0)
 		return SYNTAX_ERR;
-	}
+	if (len)
+		cli->cli_info.cli_from = ret;
 
-	cli->cli_info.cli_from = malloc((size_t)len + 1);
-	snprintf(cli->cli_info.cli_from, (size_t)len + 1, "%.*s", len, buf->buf + off);
-
-	log_debug("Trying to send message from '%s'", cli->cli_info.cli_from);
-	send_response_f(cli->sock, ST_MAILING_OK, "Sender <%s> Ok", cli->cli_info.cli_from);
+	send_response_f(cli->sock, ST_MAILING_OK, "Sender <%.*s> Ok", len, cli->cli_info.cli_from);
+	cli->transaction_flags &= ~FL_SHOULD_RETRY;
 
 	return NEXT_CMD;
+}
+
+static void free_str(char **str) {
+	if (str && *str)
+		free(*str);
+}
+
+static int user_exists(const char *user, size_t len) {
+	return 0; // user exists
 }
 
 FSM_CB(smtp, RCPT_CAME, cli) {
+	log_debug("RCPT command came");
+	cli->transaction_flags |= FL_SHOULD_RETRY;
+
+	struct buffer_t *buf = &cli->cli_data;
+	if (buf->used == 0) {
+		log_info("RCPT command came without args");
+		return SYNTAX_ERR;
+	}
+
+	log_trace("RCPT request: '%.*s'", (int)buf->used, buf->buf);
+
+	if (!rcpt_re) {
+		const char *err;
+		int err_off;
+
+		rcpt_re = pcre_compile("^to: ?<" EMAIL_RE ">$", PCRE_CASELESS, &err, &err_off, NULL);
+
+		if (!rcpt_re) {
+			log_error("pcre_compile failed (offset: %d), %s", err_off, err);
+			return SERVER_ERROR;
+		}
+	}
+
+	int len = 0;
+	char *ret __attribute__((cleanup(free_str))) = exec_email_re(rcpt_re, buf->buf, buf->used, &len);
+	if (len < 0 || len > 256)
+		return SYNTAX_ERR;
+
+	if (user_exists(ret, (size_t)len) != 0) {
+		send_response(cli->sock, ST_NO_SUCH_USER, "No such user!");
+		log_info("No such user: %.*s", len, ret);
+		return NEXT_CMD;
+	}
+
+	struct buffer_t *rcpts = &cli->cli_info.cli_recipients;
+	while (rcpts->allocated < rcpts->used + (size_t)len + sizeof(RCPT_DELIM))
+		expand_buffer(rcpts);
+
+	memcpy(rcpts->buf + rcpts->used, ret, (size_t)len);
+	memcpy(rcpts->buf + rcpts->used + len, RCPT_DELIM, sizeof(RCPT_DELIM) - 1);
+
+	rcpts->used += (size_t)len + sizeof(RCPT_DELIM) - 1;
+
+	cli->transaction_flags &= ~FL_SHOULD_RETRY;
+	cli->transaction_flags |= FL_CAN_RETRY;
+
+	send_response_f(cli->sock, ST_MAILING_OK, "Recipient <%.*s> Ok", len, ret);
+
 	return NEXT_CMD;
 }
 
+static void clear_sendmail_transaction(struct client_t *cli) {
+	safe_free(cli->cli_info.cli_from);
+	safe_free(cli->cli_info.cli_data);
+	safe_free(cli->cli_info.cli_domain);
+
+	cli->cli_info.cli_recipients.used = 0;
+}
+
 FSM_CB(smtp, DATA_CAME, cli) {
+	clear_sendmail_transaction(cli);
 	return NEXT_CMD;
 }
 
@@ -511,7 +616,7 @@ FSM_CB(smtp, WAIT_DATA, cli) {
 
 FSM_CB(smtp, READ_DATA, cli) {
 	struct buffer_t *buf = &cli->buffer;
-	while (buf->allocated <= buf->used + BLOCK_SIZE)
+	while (buf->allocated < buf->used + BLOCK_SIZE)
 		expand_buffer(buf);
 
 	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
@@ -559,12 +664,20 @@ FSM_CB(smtp, READ_DATA, cli) {
 FSM_CB(smtp, FREE_MEM, cli) {
 	log_trace("Trying to free buffer");
 
-	safe_free(cli->buffer.buf);
-	safe_free(cli->cli_data.buf);
-	safe_free(cli->cli_info.cli_domain);
-	safe_free(cli->cli_info.cli_from);
-	safe_free(cli->cli_info.cli_to);
-	safe_free(cli->cli_info.cli_data);
+	struct buffer_t *buffers[] = {
+		&cli->buffer,
+		&cli->cli_data,
+		&cli->cli_info.cli_recipients,
+	};
+
+	int i = 0;
+	for (; i < VSIZE(buffers); ++i) {
+		safe_free(buffers[i]->buf);
+		buffers[i]->used = 0;
+		buffers[i]->allocated = 0;
+	}
+
+	clear_sendmail_transaction(cli);
 
 	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
 	cli->next_state = NULL;
@@ -585,9 +698,11 @@ FSM_CB(smtp, INIT, cli) {
 	cli->delimiter_size = 2;
 	init_buffer(&cli->buffer);
 	init_buffer(&cli->cli_data);
+	init_buffer(&cli->cli_info.cli_recipients);
 
 	cli->cur_transaction = NULL;
 	cli->cur_command = NULL;
+	cli->transaction_flags = 0;
 
 	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
 	cli->next_state = NULL;
