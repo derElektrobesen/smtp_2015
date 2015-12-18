@@ -27,6 +27,8 @@
 #	define MESSAGE_MAX_SIZE (unsigned long)1025*1024
 #endif
 
+#define EMAIL_RE "[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+"
+
 enum {
 	ST_SERVICE_READY = 220,
 	ST_BYE = 221,
@@ -310,30 +312,30 @@ FSM_CB(smtp, MAIL_CAME, cli) {
 			pcre_free(*re);
 	}
 
+	log_trace("MAIL request: '%.*s'", (int)buf->used, buf->buf);
+
 	pcre *re __attribute__((cleanup(_pcre_free))) =
-		pcre_compile("^from: ?<([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+[.][a-zA-Z0-9-.]+)>$", PCRE_CASELESS, &err, &err_off, NULL);
+		pcre_compile("^from: ?<(" EMAIL_RE ")>$", PCRE_CASELESS, &err, &err_off, NULL);
 
 	if (!re) {
 		log_error("pcre_compile failed (offset: %d), %s", err_off, err);
 		return SERVER_ERROR;
 	}
 
-	int ovec[3];
+	int ovec[24];
 	int ovecsize = VSIZE(ovec);
 
 	int rc = pcre_exec(re, 0, buf->buf, (int)buf->used, 0, 0, ovec, ovecsize);
-	if (!rc) {
+
+	int off = ovec[2];
+	int len = ovec[3] - ovec[2];
+	if (rc < 0 || len <= 0) {
 		log_info("Invalid MAIL command came, data == '%.*s'", (int)buf->used, buf->buf);
 		return SYNTAX_ERR;
 	}
 
-	if (ovec[1] - ovec[0] < 0) {
-		log_error("invalid data from pcre: %d-%d", ovec[1], ovec[0]);
-		return SERVER_ERROR;
-	}
-
-	cli->cli_info.cli_from = malloc((size_t)(ovec[1] - ovec[0] + 1));
-	snprintf(cli->cli_info.cli_from, (size_t)(ovec[1] - ovec[0] + 1), "%.*s", ovec[1] - ovec[0], buf->buf + ovec[1]);
+	cli->cli_info.cli_from = malloc((size_t)len + 1);
+	snprintf(cli->cli_info.cli_from, (size_t)len + 1, "%.*s", len, buf->buf + off);
 
 	log_debug("Trying to send message from '%s'", cli->cli_info.cli_from);
 	send_response_f(cli->sock, ST_MAILING_OK, "Sender <%s> Ok", cli->cli_info.cli_from);
