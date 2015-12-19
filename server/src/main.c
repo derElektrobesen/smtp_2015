@@ -58,10 +58,7 @@ int main (int argc, const char **argv) {
 		return -1;
 	}
 
-	if (init_logger(get_opt_n_workers(), cmd_line_opts_list[OPT_OUTPUT].s_val, get_opt_user(), get_opt_group()) < 0)
-		return -1;
-
-	run_server();
+	run_server(cmd_line_opts_list[OPT_OUTPUT].s_val);
 
 	return 0;
 }

@@ -559,6 +559,7 @@ FSM_CB(smtp, PROCESS_DATA, cli) {
 	struct buffer_t *buf = &cli->cli_data;
 	log_trace("Data came: %.*s", (int)buf->used, buf->buf);
 
+	cli->cli_info.cli_recipients.used -= sizeof(RCPT_DELIM) - 1;
 	cli->cli_info.cli_recipients.buf[cli->cli_info.cli_recipients.used] = '\0';
 
 	char uidl[255];

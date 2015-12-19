@@ -21,6 +21,8 @@
 
 #define STRSZ(str) (str), (sizeof(str) - 1)
 
-int drop_privileges(const char *user, const char *group, const char *dir);
+// dirs is a list of directories to be used in project.
+// First directory will be used as root. All other dirs will bw subdirs of this dir
+int drop_privileges(const char *user, const char *group, const char **dirs);
 
 #endif // __COMMON_H__

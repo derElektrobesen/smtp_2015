@@ -119,6 +119,7 @@ static int destroy_worker_impl(struct worker_t *worker) {
 
 static int mk_worker_impl(struct worker_t *worker) {
 	pid_t pid = fork();
+	srand((unsigned)rand());
 
 	if (pid == 0) {
 		// child created

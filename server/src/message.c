@@ -16,6 +16,7 @@
 	_(FROM) \
 	_(TO) \
 	_(SUBJECT) \
+	_(DATE) \
 
 #define MK_ENUM(name) HEADER_## name,
 
@@ -75,7 +76,7 @@ void clean_re() {
 		pcre_free(header_re);
 }
 
-const char *parse_headers(const char *data, size_t data_len, struct message_header_t *headers, size_t max_headers, size_t *n_headers) {
+const char *parse_headers(const char *data, size_t data_len, struct message_header_t *headers, size_t max_headers, int *n_headers) {
 	const char delim[] = "\r\n\r\n";
 	const char *data_ptr = memmem(data, data_len, delim, sizeof(delim) - 1);
 	if (data_ptr)
@@ -106,10 +107,12 @@ const char *parse_headers(const char *data, size_t data_len, struct message_head
 			break;
 		}
 
-		struct message_header_t *hdr = headers + *n_headers++;
+		struct message_header_t *hdr = headers + *n_headers;
 		int name_len = snprintf(hdr->header_name, sizeof(hdr->header_name), "%.*s", ovector[3] - ovector[2], data + ovector[2]);
-		snprintf(hdr->header_value, sizeof(hdr->header_type), "%.*s", ovector[5] - ovector[4], data + ovector[4]);
+		snprintf(hdr->header_value, sizeof(hdr->header_value), "%.*s", ovector[5] - ovector[4], data + ovector[4]);
 		hdr->header_type = get_header_type(hdr->header_name);
+
+		log_trace("Header #%d: %s: %s", *n_headers, hdr->header_name, hdr->header_value);
 
 		int i = 1;
 		hdr->header_name[0] = (char)toupper(hdr->header_name[0]);
@@ -118,12 +121,31 @@ const char *parse_headers(const char *data, size_t data_len, struct message_head
 		}
 
 		off = ovector[1];
+		++*n_headers;
 	}
 
 	return data_ptr;
 }
 
 static int store_message(const struct added_header_t *headers, int n_headers, const char *data, size_t data_len) {
+	char message_name[128];
+	snprintf(message_name, sizeof(message_name), "%s/%ld-%s-%d-%d", get_opt_tmp_dir(), time(NULL), get_opt_hostname(), getpid(), rand());
+
+	log_info("Saving message info %s/%s", get_opt_root_dir(), message_name);
+
+	FILE *f = fopen(message_name, "w");
+	if (!f) {
+		log_error("Can't open message %s: %s", message_name, strerror(errno));
+		return -1;
+	}
+
+	int i = 0;
+	for (; i < n_headers; ++i)
+		fprintf(f, "%s: %s\r\n", headers[i].header_name, headers[i].header_value);
+
+	fprintf(f, "\r\n%.*s", (int)data_len, data);
+	fclose(f);
+
 	return 0;
 }
 
@@ -162,7 +184,7 @@ int mk_message(const char *data, size_t data_len, const char *mail_from, const c
 	};
 
 	struct message_header_t headers[MAX_HEADERS];
-	size_t n_headers = 0;
+	int n_headers = 0;
 
 	const char *data_ptr = parse_headers(data, data_len, headers, VSIZE(headers), &n_headers);
 	if (!data_ptr)
@@ -171,22 +193,24 @@ int mk_message(const char *data, size_t data_len, const char *mail_from, const c
 	int i = 0;
 	const struct message_header_t *subject = NULL;
 	for (; i < n_headers; ++i) {
-		if (headers[i].header_type == HEADER_TO) {
-			headers_to_add[n_default_headers++] = (struct added_header_t){
-				.header_name = headers[i].header_name,
-				.header_value = headers[i].header_value,
-			};
-		} else if (headers[i].header_type == HEADER_SUBJECT) {
+		if (headers[i].header_type == HEADER_SUBJECT) {
 			subject = headers + i;
 		}
 	}
 
-	headers_to_add[n_default_headers++] = (struct added_header_t){
-		.header_name = subject->header_name,
-		.header_value = subject->header_value,
-	};
+	if (subject) {
+		headers_to_add[n_default_headers++] = (struct added_header_t){
+			.header_name = subject->header_name,
+			.header_value = subject->header_value,
+		};
+	} else {
+		headers_to_add[n_default_headers++] = (struct added_header_t){
+			.header_name = "Subject",
+			.header_value = "<No subject>",
+		};
+	}
 
-	for (; i < n_headers; ++i) {
+	for (i = 0; i < n_headers; ++i) {
 		if (headers[i].header_type == HEADER_OTHER) {
 			headers_to_add[n_default_headers++] = (struct added_header_t){
 				.header_name = headers[i].header_name,

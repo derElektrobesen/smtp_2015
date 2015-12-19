@@ -10,7 +10,7 @@
 #include <errno.h>
 
 //Chroot and change user and group. Got this function from Simple HTTPD 1.0.
-int drop_privileges(const char *user, const char *group, const char *dir) {
+int drop_privileges(const char *user, const char *group, const char **dirs) {
 	struct passwd *pwd;
 	struct group *grp;
 
@@ -24,12 +24,16 @@ int drop_privileges(const char *user, const char *group, const char *dir) {
 		return -1;
 	}
 
-	if (dir) {
-		int ret = chdir(dir);
+	if (dirs) {
+		int ret = chdir(dirs[0]);
 		const char *action = "chdir";
+		const char **d = dirs;
+		const char *dir = *d;
 		if (ret != 0 && errno == ENOENT) {
 			log_info("Directory %s not found. Trying to create", dir);
-			ret = mkdir(dir, 0755);
+			ret = mkdir(dir, 0777);
+			if (ret == 0)
+				ret = chown(dir, grp->gr_gid, pwd->pw_uid);
 			action = "mkdir";
 		}
 
@@ -41,6 +45,19 @@ int drop_privileges(const char *user, const char *group, const char *dir) {
 		if (chroot(dir) != 0) {
 			log_error("Can't chroot %s: %s", dir, strerror(errno));
 			return -1;
+		}
+
+		++d;
+		while (*d) {
+			ret = mkdir(*d, 0777);
+			if (ret != 0)
+				log_error("Can't create directory %s/%s: %s", dir, *d, strerror(errno));
+			else {
+				ret = chown(*d, pwd->pw_uid, grp->gr_gid);
+				if (ret != 0)
+					log_error("Can't set owner on %s/%s: %s", dir, *d, strerror(errno));
+			}
+			++d;
 		}
 	}
 

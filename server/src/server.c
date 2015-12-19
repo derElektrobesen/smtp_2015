@@ -104,7 +104,14 @@ static int mk_server() {
 		return -1;
 	}
 
-	if (drop_privileges(get_opt_user(), get_opt_group(), get_opt_root_dir()) < 0) {
+	const char *dirs[] = {
+		get_opt_root_dir(),
+		get_opt_queue_dir(),
+		get_opt_tmp_dir(),
+		NULL,
+	};
+
+	if (drop_privileges(get_opt_user(), get_opt_group(), dirs) < 0) {
 		close(sock);
 		return -1;
 	}
@@ -256,12 +263,15 @@ static void run_loop(int server_socket) {
 	FSM_RUN(server, &server_status);
 }
 
-void run_server() {
+void run_server(const char *logpath) {
 	int server_socket = mk_server();
 	if (server_socket < 0) {
 		log_error("Can't create server. Stop");
 		return;
 	}
+
+	if (init_logger(get_opt_n_workers(), logpath, get_opt_user(), get_opt_group()) < 0)
+		return;
 
 	run_loop(server_socket);
 }
