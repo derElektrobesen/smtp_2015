@@ -3,6 +3,8 @@
 #include "fsm.h"
 #include "config.h"
 
+#include "message.h"
+
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -34,12 +36,15 @@ enum {
 	ST_SERVICE_READY = 220,
 	ST_BYE = 221,
 	ST_MAILING_OK = 250,
-	ST_LOCAL_ERR = 451,
+	ST_START_DATA = 354,
 	ST_IN_TRANSACTION = 421,
+	ST_LOCAL_ERR = 451,
+	ST_NO_LOCAL_STORAGE = 452,
 	ST_SYNTAX_ERR = 500,
 	ST_INVALID_PARAMS = 501,
 	ST_INVALID_CMD = 503,
 	ST_NO_SUCH_USER = 550,
+	ST_NO_MAIL_STORAGE = 552,
 	ST_TRANSACTION_FAILED = 554,
 };
 
@@ -540,6 +545,7 @@ FSM_CB(smtp, DATA_CAME, cli) {
 	buf->used += 2;
 
 	log_info("Reading data");
+	send_response(cli->sock, ST_START_DATA, "Start mail input; end with <CRLF>.<CRLF>");
 
 	cli->next_state = PROCESS_DATA;
 	cli->cli_data.used = 0;
@@ -550,6 +556,15 @@ FSM_CB(smtp, DATA_CAME, cli) {
 FSM_CB(smtp, PROCESS_DATA, cli) {
 	struct buffer_t *buf = &cli->cli_data;
 	log_trace("Data came: %.*s", (int)buf->used, buf->buf);
+
+	char uidl[64];
+	if (mk_message(buf->buf, buf->used, uidl, sizeof(uidl)) != 0) {
+		log_warn("Message not accepted");
+		send_response(cli->sock, ST_TRANSACTION_FAILED, "Transaction failed");
+	} else {
+		log_warn("Message with uidl %s was accepted", uidl);
+		send_response_f(cli->sock, ST_MAILING_OK, "OK, message accepted for delivery: queued as %s", uidl);
+	}
 
 	clear_sendmail_transaction(cli);
 	return NEXT_CMD;
@@ -662,6 +677,21 @@ FSM_CB(smtp, READ_DATA, cli) {
 	}
 
 	buf->used += (size_t)received;
+
+	if (buf->used > MESSAGE_MAX_SIZE) {
+		log_warn("Too large chunk found in request. Abort");
+		int status = ST_NO_LOCAL_STORAGE;
+		const char *msg = "Requested action not taken: insufficient system storage. Transaction aborted";
+		if (cli->next_state && cli->next_state == PROCESS_DATA) {
+			status = ST_NO_MAIL_STORAGE;
+			msg = "Requested mail action aborted: exceeded storage allocation";
+		}
+
+		send_response(cli->sock, status, msg);
+		clear_sendmail_transaction(cli);
+
+		return NEXT_CMD;
+	}
 
 	char *delimiter_ptr = (char *)memmem(buf->buf, buf->used, cli->delimiter, cli->delimiter_size);
 	if (delimiter_ptr) {
