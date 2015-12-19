@@ -10,6 +10,7 @@
 	_(listen_port, INT) \
 	_(root_dir, STR) \
 	_(queue_dir, STR) \
+	_(tmp_dir, STR) \
 	_(n_workers, INT) \
 	_(hostname, STR) \
 

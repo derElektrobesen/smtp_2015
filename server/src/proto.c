@@ -30,7 +30,7 @@
 #endif
 
 #define EMAIL_RE "(?:(?:@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+,?)*:)?([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\\.[a-zA-Z0-9-.]+)"
-#define RCPT_DELIM ";"
+#define RCPT_DELIM ", "
 
 enum {
 	ST_SERVICE_READY = 220,
@@ -529,6 +529,8 @@ static void clear_sendmail_transaction(struct client_t *cli) {
 	safe_free(cli->cli_info.cli_domain);
 
 	cli->cli_info.cli_recipients.used = 0;
+	cli->delimiter = "\r\n";
+	cli->delimiter_size = 2;
 }
 
 FSM_CB(smtp, DATA_CAME, cli) {
@@ -557,8 +559,11 @@ FSM_CB(smtp, PROCESS_DATA, cli) {
 	struct buffer_t *buf = &cli->cli_data;
 	log_trace("Data came: %.*s", (int)buf->used, buf->buf);
 
-	char uidl[64];
-	if (mk_message(buf->buf, buf->used, uidl, sizeof(uidl)) != 0) {
+	cli->cli_info.cli_recipients.buf[cli->cli_info.cli_recipients.used] = '\0';
+
+	char uidl[255];
+	// ignore first \r\n chars
+	if (mk_message(buf->buf + 2, buf->used, cli->cli_info.cli_from, cli->cli_info.cli_recipients.buf, uidl, sizeof(uidl)) != 0) {
 		log_warn("Message not accepted");
 		send_response(cli->sock, ST_TRANSACTION_FAILED, "Transaction failed");
 	} else {
@@ -663,6 +668,8 @@ FSM_CB(smtp, READ_DATA, cli) {
 	if (received == 0) {
 		log_info("Client %d was gone. Close connection", cli->sock);
 		close(cli->sock);
+
+		cli->next_state = NULL;
 		return FREE_MEM;
 	}
 	if (received < 0) {
