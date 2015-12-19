@@ -133,6 +133,7 @@ static void expand_buffer(struct buffer_t *buf) {
 	_(ARG, RSET_CAME) \
 	_(ARG, RSET_CAME_AFTER) \
 	_(ARG, NEXT_CMD) \
+	_(ARG, PROCESS_DATA) \
 	_(ARG, SYNTAX_ERR) \
 	_(ARG, SERVER_ERROR) \
 	_(ARG, SHOW_ERROR_AND_CLOSE) \
@@ -526,6 +527,30 @@ static void clear_sendmail_transaction(struct client_t *cli) {
 }
 
 FSM_CB(smtp, DATA_CAME, cli) {
+	cli->delimiter = "\r\n.\r\n";
+	cli->delimiter_size = 5;
+
+	struct buffer_t *buf = &cli->buffer;
+	while (buf->allocated < buf->used + 2)
+		expand_buffer(buf);
+
+	// TODO: process dot as first sym
+	memmove(buf->buf + 2, buf->buf, buf->used);
+	memcpy(buf->buf, "\r\n", 2); // small hack to simplify delimiter finding
+	buf->used += 2;
+
+	log_info("Reading data");
+
+	cli->next_state = PROCESS_DATA;
+	cli->cli_data.used = 0;
+
+	return WAIT_DATA;
+}
+
+FSM_CB(smtp, PROCESS_DATA, cli) {
+	struct buffer_t *buf = &cli->cli_data;
+	log_trace("Data came: %.*s", (int)buf->used, buf->buf);
+
 	clear_sendmail_transaction(cli);
 	return NEXT_CMD;
 }
@@ -619,9 +644,6 @@ FSM_CB(smtp, READ_DATA, cli) {
 	while (buf->allocated < buf->used + BLOCK_SIZE)
 		expand_buffer(buf);
 
-	FSM_STATE_TYPE(smtp) next_state = cli->next_state;
-	cli->next_state = NULL;
-
 	ssize_t received = read(cli->sock, buf->buf + buf->used, buf->allocated - buf->used);
 	if (received == 0) {
 		log_info("Client %d was gone. Close connection", cli->sock);
@@ -652,6 +674,9 @@ FSM_CB(smtp, READ_DATA, cli) {
 
 		buf->used -= cli_buf->used + cli->delimiter_size;
 		memmove(buf->buf, delimiter_ptr + cli->delimiter_size, buf->used);
+
+		FSM_STATE_TYPE(smtp) next_state = cli->next_state;
+		cli->next_state = NULL;
 
 		assert(next_state);
 
