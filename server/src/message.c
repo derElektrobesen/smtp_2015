@@ -37,6 +37,9 @@ struct header_info_t supported_headers[] = {
 	HEADERS(MK_INFO)
 };
 
+#undef MK_ENUM
+#undef MK_INFO
+
 static enum header_type_t get_header_type(const char *header_name) {
 	int i = 0;
 	for (; i < VSIZE(supported_headers); ++i) {
@@ -52,9 +55,6 @@ static enum header_type_t get_header_type(const char *header_name) {
 
 	return HEADER_OTHER;
 }
-
-#undef MK_ENUM
-#undef MK_INFO
 
 struct message_header_t {
 	enum header_type_t header_type;
@@ -131,7 +131,7 @@ static int store_message(const struct added_header_t *headers, int n_headers, co
 	char message_name[128];
 	snprintf(message_name, sizeof(message_name), "%s/%ld-%s-%d-%d", get_opt_tmp_dir(), time(NULL), get_opt_hostname(), getpid(), rand());
 
-	log_info("Saving message info %s/%s", get_opt_root_dir(), message_name);
+	log_info("Saving message to %s/%s", get_opt_root_dir(), message_name);
 
 	FILE *f = fopen(message_name, "w");
 	if (!f) {
